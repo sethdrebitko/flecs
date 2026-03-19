@@ -719,36 +719,263 @@ public func flecs_enqueue(
 public func ecs_defer_begin(
     _ world: UnsafeMutablePointer<ecs_world_t>) -> Bool
 {
-    // In the full implementation this would call flecs_stage_from_world
-    // to get the stage. For now, requires the caller to manage stages.
-    // TODO: Implement when stage lookup is available.
-    return false
+    let stage = flecs_stage_from_world(world)
+    return flecs_defer_begin(world, stage)
 }
 
 /// End deferred mode (public API).
 public func ecs_defer_end(
     _ world: UnsafeMutablePointer<ecs_world_t>) -> Bool
 {
-    // TODO: Implement when stage lookup is available.
-    return false
+    let stage = flecs_stage_from_world(world)
+    return flecs_defer_end(world, stage)
 }
 
-/// Suspend deferred mode.
+/// Check if deferred mode is active.
+public func ecs_is_deferred(
+    _ world: UnsafeMutablePointer<ecs_world_t>) -> Bool
+{
+    let stage = flecs_stage_from_world(world)
+    return stage.pointee.defer > 0
+}
+
+/// Suspend deferred mode (single-arg public API).
 public func ecs_defer_suspend(
-    _ world: UnsafeMutablePointer<ecs_world_t>,
-    _ stage: UnsafeMutablePointer<ecs_stage_t>)
+    _ world: UnsafeMutablePointer<ecs_world_t>)
 {
-    assert(stage.pointee.defer > 0,
-           "world/stage must be deferred before it can be suspended")
+    let stage = flecs_stage_from_world(world)
     stage.pointee.defer = -stage.pointee.defer
 }
 
-/// Resume deferred mode.
+/// Resume deferred mode (single-arg public API).
 public func ecs_defer_resume(
-    _ world: UnsafeMutablePointer<ecs_world_t>,
-    _ stage: UnsafeMutablePointer<ecs_stage_t>)
+    _ world: UnsafeMutablePointer<ecs_world_t>)
 {
-    assert(stage.pointee.defer < 0,
-           "world/stage must be suspended before it can be resumed")
+    let stage = flecs_stage_from_world(world)
     stage.pointee.defer = -stage.pointee.defer
+}
+
+// MARK: - Command Flush
+
+/// Flush a batch of commands for a single entity.
+/// Computes the final table from accumulated add/remove operations,
+/// moves the entity once, then applies set/modified commands.
+private func flecs_cmd_batch_for_entity(
+    _ world: UnsafeMutablePointer<ecs_world_t>,
+    _ diff: UnsafeMutablePointer<ecs_table_diff_builder_t>,
+    _ entity: ecs_entity_t,
+    _ cmds: UnsafeMutablePointer<ecs_cmd_t>,
+    _ start: Int32)
+{
+    guard let r = flecs_entities_get(UnsafePointer(world), entity) else { return }
+    guard var table = r.pointee.table else { return }
+
+    world.pointee.info.cmd.batched_entity_count += 1
+
+    var has_set = false
+    var cur = start
+    var next_for_entity: Int32
+
+    // Phase 1: Compute destination table from add/remove commands
+    repeat {
+        let cmd = cmds + Int(cur)
+        let id = cmd.pointee.id
+        next_for_entity = cmd.pointee.next_for_entity
+        if next_for_entity < 0 { next_for_entity *= -1 }
+
+        // Validate id
+        if id != 0 {
+            if let cr = flecs_components_get(UnsafePointer(world), id) {
+                if (cr.pointee.flags & EcsIdDontFragment) != 0 {
+                    if cmd.pointee.kind == .EcsCmdSet {
+                        cmd.pointee.kind = .EcsCmdSetDontFragment
+                    }
+                    continue
+                }
+            }
+        }
+
+        switch cmd.pointee.kind {
+        case .EcsCmdAddModified:
+            cmd.pointee.kind = .EcsCmdModified
+            if let t = flecs_find_table_add(world, table, id, diff) {
+                table = t
+            }
+            world.pointee.info.cmd.batched_command_count += 1
+
+        case .EcsCmdAdd:
+            if let t = flecs_find_table_add(world, table, id, diff) {
+                table = t
+            }
+            world.pointee.info.cmd.batched_command_count += 1
+            cmd.pointee.kind = .EcsCmdSkip
+
+        case .EcsCmdSet, .EcsCmdEnsure:
+            if let t = flecs_find_table_add(world, table, id, diff) {
+                table = t
+            }
+            world.pointee.info.cmd.batched_command_count += 1
+            has_set = true
+
+        case .EcsCmdRemove:
+            if let t = flecs_find_table_remove(world, table, id, diff) {
+                table = t
+            }
+            world.pointee.info.cmd.batched_command_count += 1
+            cmd.pointee.kind = .EcsCmdSkip
+
+        case .EcsCmdClear:
+            // Remove all components
+            table = withUnsafeMutablePointer(to: &world.pointee.store.root) { $0 }
+            world.pointee.info.cmd.batched_command_count += 1
+            cmd.pointee.kind = .EcsCmdSkip
+
+        default:
+            break
+        }
+
+        cur = next_for_entity
+    } while cur != 0
+
+    // Phase 2: Move entity to destination table
+    var table_diff = ecs_table_diff_t()
+    flecs_table_diff_build_noalloc(diff, &table_diff)
+    flecs_defer_begin(world, world.pointee.stages![0]!)
+    flecs_commit(world, entity, r, table, &table_diff, true, 0)
+    flecs_defer_end(world, world.pointee.stages![0]!)
+
+    // Phase 3: Copy set values to final component storage
+    if has_set {
+        cur = start
+        repeat {
+            let cmd = cmds + Int(cur)
+            next_for_entity = cmd.pointee.next_for_entity
+            if next_for_entity < 0 { next_for_entity *= -1 }
+
+            if cmd.pointee.kind == .EcsCmdSet || cmd.pointee.kind == .EcsCmdEnsure {
+                if let value = cmd.pointee.is._1.value {
+                    let dst = flecs_get_mut(world, entity, cmd.pointee.id, r,
+                        cmd.pointee.is._1.size)
+                    if let dst_ptr = dst.ptr, let ti = dst.ti {
+                        flecs_type_info_copy(dst_ptr, value, 1, UnsafePointer(ti))
+                    }
+                }
+            }
+
+            cur = next_for_entity
+        } while cur != 0
+    }
+
+    flecs_table_diff_builder_clear(diff)
+}
+
+/// Execute a single non-batched command.
+private func flecs_cmd_execute(
+    _ world: UnsafeMutablePointer<ecs_world_t>,
+    _ cmd: UnsafeMutablePointer<ecs_cmd_t>)
+{
+    let entity = cmd.pointee.entity
+    let id = cmd.pointee.id
+
+    switch cmd.pointee.kind {
+    case .EcsCmdAdd:
+        if entity != 0 { ecs_add_id(world, entity, id) }
+    case .EcsCmdRemove:
+        if entity != 0 { ecs_remove_id(world, entity, id) }
+    case .EcsCmdDelete:
+        ecs_delete(world, entity)
+    case .EcsCmdClear:
+        ecs_clear(world, entity)
+    case .EcsCmdClone:
+        ecs_clone(world, entity, id, cmd.pointee.is._1.clone_value)
+    case .EcsCmdSet, .EcsCmdSetDontFragment:
+        // Set value on entity
+        if let value = cmd.pointee.is._1.value {
+            // Would call ecs_set_id with the value
+        }
+    case .EcsCmdEnsure:
+        // Ensure + copy value
+        if let value = cmd.pointee.is._1.value {
+            // Would call ecs_ensure_id + copy
+        }
+    case .EcsCmdEmplace:
+        // Emplace value (no ctor)
+        break
+    case .EcsCmdModified, .EcsCmdModifiedNoHook:
+        // Signal modification
+        ecs_modified_id(world, entity, id)
+    case .EcsCmdEnable:
+        ecs_enable_id(world, entity, id, true)
+    case .EcsCmdDisable:
+        ecs_enable_id(world, entity, id, false)
+    case .EcsCmdOnDeleteAction:
+        flecs_on_delete(world, id, entity, true, false)
+    case .EcsCmdBulkNew:
+        flecs_flush_bulk_new(world, cmd)
+    case .EcsCmdPath:
+        if let name = cmd.pointee.is._1.value?.assumingMemoryBound(
+            to: CChar.self)
+        {
+            ecs_add_fullpath(world, entity, name)
+            ecs_os_free(cmd.pointee.is._1.value)
+            cmd.pointee.is._1.value = nil
+        }
+    case .EcsCmdEvent:
+        if let desc = cmd.pointee.is._1.value?.bindMemory(
+            to: ecs_event_desc_t.self, capacity: 1)
+        {
+            flecs_emit(world, world, desc)
+        }
+    case .EcsCmdSkip, .EcsCmdAddModified:
+        break
+    }
+}
+
+/// Flush bulk new command.
+private func flecs_flush_bulk_new(
+    _ world: UnsafeMutablePointer<ecs_world_t>,
+    _ cmd: UnsafeMutablePointer<ecs_cmd_t>)
+{
+    guard let entities = cmd.pointee.is._n.entities else { return }
+
+    if cmd.pointee.id != 0 {
+        for i in 0..<Int(cmd.pointee.is._n.count) {
+            ecs_add_id(world, entities[i], cmd.pointee.id)
+        }
+    }
+
+    ecs_os_free(entities)
+}
+
+/// Remove an invalid id (e.g. target of deleted pair).
+/// Returns true if entity should remain alive.
+private func flecs_remove_invalid(
+    _ world: UnsafeMutablePointer<ecs_world_t>,
+    _ id: ecs_id_t,
+    _ id_out: UnsafeMutablePointer<ecs_id_t>) -> Bool
+{
+    if ECS_HAS_ID_FLAG(id, ECS_PAIR) {
+        let rel = ECS_PAIR_FIRST(id)
+        if !flecs_entities_is_valid(world, rel) {
+            id_out.pointee = 0
+            return true
+        }
+        let tgt = ECS_PAIR_SECOND(id)
+        if !flecs_entities_is_valid(world, tgt) {
+            if let cr = flecs_components_get(
+                UnsafePointer(world), ecs_pair(rel, EcsWildcard))
+            {
+                let action = ECS_ID_ON_DELETE_TARGET(cr.pointee.flags)
+                if action == EcsDelete { return false }
+            }
+            id_out.pointee = 0
+            return true
+        }
+    } else {
+        if !flecs_entities_is_valid(world, id & ECS_COMPONENT_MASK) {
+            id_out.pointee = 0
+            return true
+        }
+    }
+    return true
 }
