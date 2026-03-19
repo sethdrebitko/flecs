@@ -358,26 +358,5 @@ public struct ecs_query_impl_t {
     public init() {}
 }
 
-// MARK: - Observer Implementation
-
-public struct ecs_event_id_record_t {
-    public var self_: ecs_map_t = ecs_map_t()
-    public var self_up: ecs_map_t = ecs_map_t()
-    public var up: ecs_map_t = ecs_map_t()
-    public var observer_count: Int32 = 0
-    public init() {}
-}
-
-public struct ecs_observer_impl_t {
-    public var pub: ecs_observer_t = ecs_observer_t()
-    public var last_event_id: UnsafeMutablePointer<Int32>? = nil
-    public var last_event_id_storage: Int32 = 0
-    public var flags: ecs_flags32_t = 0
-    public var term_index: Int8 = 0
-    public var register_id: ecs_id_t = 0
-    public var id: UInt64 = 0
-    public var children: ecs_vec_t = ecs_vec_t()
-    public var not_query: UnsafeMutablePointer<ecs_query_t>? = nil
-    public var dtor: flecs_poly_dtor_t? = nil
-    public init() {}
-}
+// Note: ecs_event_id_record_t is defined in Observable.swift
+// Note: ecs_observer_impl_t is defined in Observer.swift
