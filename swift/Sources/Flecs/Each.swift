@@ -105,3 +105,91 @@ public func ecs_count_id(
 
     return count
 }
+
+// MARK: - Children Iteration
+
+/// Internal next function for ordered children vectors.
+private func flecs_children_next_ordered(
+    _ it: UnsafeMutablePointer<ecs_iter_t>?) -> Bool
+{
+    guard let it = it else { return false }
+    return ecs_children_next(it)
+}
+
+/// Iterate children of an entity with a specific relationship.
+public func ecs_children_w_rel(
+    _ stage: UnsafePointer<ecs_world_t>,
+    _ relationship: ecs_entity_t,
+    _ parent: ecs_entity_t) -> ecs_iter_t
+{
+    guard let world = ecs_get_world(UnsafeRawPointer(stage)) else {
+        return ecs_iter_t()
+    }
+
+    var it = ecs_iter_t()
+    it.real_world = UnsafeMutablePointer(mutating: world)
+    it.world = UnsafeMutablePointer(mutating: stage)
+    it.field_count = 1
+    it.next = ecs_children_next
+
+    guard let cr = flecs_components_get(
+        world, ecs_pair(relationship, parent)) else {
+        return ecs_iter_t()
+    }
+
+    // If ordered children, return them directly
+    if (cr.pointee.flags & EcsIdOrderedChildren) != 0 {
+        if let pair = cr.pointee.pair {
+            let elem_size = Int32(MemoryLayout<ecs_entity_t>.stride)
+            it.entities = ecs_vec_first(&pair.pointee.ordered_children)?
+                .bindMemory(to: ecs_entity_t.self,
+                           capacity: Int(ecs_vec_count(&pair.pointee.ordered_children)))
+            it.count = ecs_vec_count(&pair.pointee.ordered_children)
+            it.next = flecs_children_next_ordered
+        }
+        return it
+    }
+
+    // If sparse children, return from sparse set
+    if (cr.pointee.flags & EcsIdSparse) != 0 {
+        if let sparse = cr.pointee.sparse {
+            it.entities = flecs_sparse_ids(sparse)
+            it.count = flecs_sparse_count(sparse)
+            it.next = flecs_children_next_ordered
+        }
+        return it
+    }
+
+    // Fall back to regular each iteration
+    return ecs_each_id(stage, ecs_pair(relationship, parent))
+}
+
+/// Iterate children of an entity (using ChildOf relationship).
+public func ecs_children(
+    _ stage: UnsafePointer<ecs_world_t>,
+    _ parent: ecs_entity_t) -> ecs_iter_t
+{
+    return ecs_children_w_rel(stage, EcsChildOf, parent)
+}
+
+/// Advance a children iterator. Returns false when done.
+public func ecs_children_next(
+    _ it: UnsafeMutablePointer<ecs_iter_t>?) -> Bool
+{
+    guard let it = it else { return false }
+
+    if it.pointee.next == nil {
+        return false
+    }
+
+    // Check if this is an ordered children iterator (returns once)
+    if it.pointee.next == flecs_children_next_ordered {
+        if it.pointee.count == 0 {
+            return false
+        }
+        it.pointee.next = nil  // Only return once
+        return true
+    }
+
+    return ecs_each_next(it)
+}

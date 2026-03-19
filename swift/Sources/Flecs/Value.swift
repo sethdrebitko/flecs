@@ -95,9 +95,8 @@ public func ecs_value_init(
     _ type: ecs_entity_t,
     _ ptr: UnsafeMutableRawPointer?) -> Int32
 {
-    // Would call ecs_get_type_info(world, type) in full implementation
-    // For now, return error since we don't have the full lookup chain yet
-    return -1
+    guard let ti = ecs_get_type_info(world, type) else { return -1 }
+    return ecs_value_init_w_type_info(world, ti, ptr)
 }
 
 /// Finalize a value using type info.
@@ -117,7 +116,8 @@ public func ecs_value_fini(
     _ type: ecs_entity_t,
     _ ptr: UnsafeMutableRawPointer?) -> Int32
 {
-    return -1
+    guard let ti = ecs_get_type_info(world, type) else { return -1 }
+    return ecs_value_fini_w_type_info(world, ti, ptr)
 }
 
 /// Copy a value using type info.
@@ -151,4 +151,94 @@ public func ecs_value_move_ctor_w_type_info(
 {
     flecs_type_info_move_ctor(dst, src, 1, ti)
     return 0
+}
+
+/// Allocate and initialize a new value using type info.
+public func ecs_value_new_w_type_info(
+    _ world: UnsafeMutablePointer<ecs_world_t>,
+    _ ti: UnsafePointer<ecs_type_info_t>) -> UnsafeMutableRawPointer?
+{
+    let result = flecs_alloc(&world.pointee.allocator, ti.pointee.size)
+    guard let result = result else { return nil }
+
+    if ecs_value_init_w_type_info(UnsafePointer(world), ti, result) != 0 {
+        flecs_free(&world.pointee.allocator, ti.pointee.size, result)
+        return nil
+    }
+
+    return result
+}
+
+/// Allocate and initialize a new value by entity type.
+public func ecs_value_new(
+    _ world: UnsafeMutablePointer<ecs_world_t>,
+    _ type: ecs_entity_t) -> UnsafeMutableRawPointer?
+{
+    guard let ti = ecs_get_type_info(UnsafePointer(world), type) else { return nil }
+    return ecs_value_new_w_type_info(world, ti)
+}
+
+/// Free a value (finalize + deallocate).
+public func ecs_value_free(
+    _ world: UnsafeMutablePointer<ecs_world_t>,
+    _ type: ecs_entity_t,
+    _ ptr: UnsafeMutableRawPointer?) -> Int32
+{
+    guard let ptr = ptr else { return -1 }
+    guard let ti = ecs_get_type_info(UnsafePointer(world), type) else { return -1 }
+
+    if ecs_value_fini_w_type_info(UnsafePointer(world), ti, ptr) != 0 {
+        return -1
+    }
+
+    flecs_free(&world.pointee.allocator, ti.pointee.size, ptr)
+    return 0
+}
+
+/// Copy a value by entity type.
+public func ecs_value_copy(
+    _ world: UnsafePointer<ecs_world_t>,
+    _ type: ecs_entity_t,
+    _ dst: UnsafeMutableRawPointer?,
+    _ src: UnsafeRawPointer?) -> Int32
+{
+    guard let ti = ecs_get_type_info(world, type) else { return -1 }
+    return ecs_value_copy_w_type_info(world, ti, dst, src)
+}
+
+/// Move a value by entity type.
+public func ecs_value_move(
+    _ world: UnsafePointer<ecs_world_t>,
+    _ type: ecs_entity_t,
+    _ dst: UnsafeMutableRawPointer?,
+    _ src: UnsafeMutableRawPointer?) -> Int32
+{
+    guard let ti = ecs_get_type_info(world, type) else { return -1 }
+    return ecs_value_move_w_type_info(world, ti, dst, src)
+}
+
+/// Move-construct a value by entity type.
+public func ecs_value_move_ctor(
+    _ world: UnsafePointer<ecs_world_t>,
+    _ type: ecs_entity_t,
+    _ dst: UnsafeMutableRawPointer?,
+    _ src: UnsafeMutableRawPointer?) -> Int32
+{
+    guard let ti = ecs_get_type_info(world, type) else { return -1 }
+    return ecs_value_move_ctor_w_type_info(world, ti, dst, src)
+}
+
+/// Copy-construct helper (used by sparse override).
+@inline(__always)
+internal func flecs_type_info_copy_ctor(
+    _ dst: UnsafeMutableRawPointer?,
+    _ src: UnsafeRawPointer?,
+    _ count: Int32,
+    _ ti: UnsafePointer<ecs_type_info_t>)
+{
+    if let copy_ctor = ti.pointee.hooks.copy_ctor {
+        copy_ctor(dst, src, count, ti)
+    } else if let dst = dst, let src = src {
+        memcpy(dst, src, Int(ti.pointee.size) * Int(count))
+    }
 }

@@ -183,3 +183,52 @@ public func flecs_get_dtor(
     guard let ptr = assert_mixin(poly, .dtor) else { return nil }
     return ptr.bindMemory(to: flecs_poly_dtor_t.self, capacity: 1)
 }
+
+/// Bind a poly object to an entity, creating the (Poly, tag) pair.
+/// Suspends defer if active to ensure immediate creation.
+public func flecs_poly_bind_(
+    _ world: UnsafeMutablePointer<ecs_world_t>,
+    _ entity: ecs_entity_t,
+    _ tag: ecs_entity_t) -> UnsafeMutablePointer<EcsPoly>?
+{
+    // Add tag to entity for easy querying
+    if !ecs_has_id(world, entity, tag) {
+        ecs_add_id(world, entity, tag)
+    }
+
+    // Never defer creation of a poly object
+    var deferred = false
+    if ecs_is_deferred(world) {
+        deferred = true
+        ecs_defer_suspend(world)
+    }
+
+    let result = ecs_ensure_pair(world, entity, EcsPoly.self, tag)
+
+    if deferred {
+        ecs_defer_resume(world)
+    }
+
+    return result
+}
+
+/// Notify that a poly component was modified.
+public func flecs_poly_modified_(
+    _ world: UnsafeMutablePointer<ecs_world_t>,
+    _ entity: ecs_entity_t,
+    _ tag: ecs_entity_t)
+{
+    ecs_modified_pair(world, entity, ecs_id_EcsPoly, tag)
+}
+
+/// Get a poly object from an entity by tag.
+public func flecs_poly_get_(
+    _ world: UnsafePointer<ecs_world_t>,
+    _ entity: ecs_entity_t,
+    _ tag: ecs_entity_t) -> UnsafeMutableRawPointer?
+{
+    guard let p = ecs_get_pair(world, entity, EcsPoly.self, tag) else {
+        return nil
+    }
+    return p.pointee.poly
+}
