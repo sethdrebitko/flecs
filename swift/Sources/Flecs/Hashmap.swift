@@ -6,11 +6,7 @@ import Foundation
 
 // MARK: - Types
 
-/// Function type for hashing a key.
-public typealias ecs_hash_value_action_t = @convention(c) (UnsafeRawPointer?) -> UInt64
-
-/// Function type for comparing two keys. Returns 0 if equal.
-public typealias ecs_compare_action_t = @convention(c) (UnsafeRawPointer?, UnsafeRawPointer?) -> Int32
+// ecs_hash_value_action_t and ecs_compare_action_t defined in Structs.swift
 
 /// A bucket in the hashmap, storing parallel key and value vectors.
 public struct ecs_hm_bucket_t {

@@ -6,7 +6,7 @@ import Foundation
 
 // MARK: - Constants
 
-public let FLECS_SPARSE_PAGE_BITS: Int32 = 6
+// FLECS_SPARSE_PAGE_BITS defined in Types.swift
 public let FLECS_SPARSE_PAGE_SIZE: Int32 = 1 << FLECS_SPARSE_PAGE_BITS  // 64
 
 @inline(__always)

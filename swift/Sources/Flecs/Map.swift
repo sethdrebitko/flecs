@@ -6,14 +6,7 @@ import Foundation
 
 // MARK: - Types
 
-/// Map key type.
-public typealias ecs_map_key_t = UInt64
-
-/// Map value type.
-public typealias ecs_map_val_t = UInt64
-
-/// Map data type (used for key-value storage).
-public typealias ecs_map_data_t = UInt64
+// ecs_map_key_t, ecs_map_val_t, ecs_map_data_t defined in Types.swift
 
 /// A single entry in a map bucket (linked list node).
 public struct ecs_bucket_entry_t {
