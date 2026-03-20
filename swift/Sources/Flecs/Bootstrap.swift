@@ -1,16 +1,21 @@
 // Bootstrap.swift - 1:1 translation of flecs bootstrap.c
 // World initialization and builtin entity/component registration
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Identifier Lifecycle
 
 /// Destructor for EcsIdentifier - frees the string value.
 public func flecs_identifier_dtor(
     _ ptr: UnsafeMutablePointer<EcsIdentifier>)
 {
-    if let val = ptr.pointee.value {
-        ecs_os_free(UnsafeMutableRawPointer(mutating: val))
+    if ptr.pointee.value != nil {
+        ecs_os_free(UnsafeMutableRawPointer(mutating: ptr.pointee.value!))
         ptr.pointee.value = nil
     }
 }
@@ -20,8 +25,8 @@ public func flecs_identifier_copy(
     _ dst: UnsafeMutablePointer<EcsIdentifier>,
     _ src: UnsafePointer<EcsIdentifier>)
 {
-    if let srcVal = src.pointee.value {
-        dst.pointee.value = ecs_os_strdup(srcVal)
+    if src.pointee.value != nil {
+        dst.pointee.value = ecs_os_strdup(src.pointee.value!)
     } else {
         dst.pointee.value = nil
     }
@@ -36,8 +41,8 @@ public func flecs_identifier_move(
     _ dst: UnsafeMutablePointer<EcsIdentifier>,
     _ src: UnsafeMutablePointer<EcsIdentifier>)
 {
-    if let dstVal = dst.pointee.value {
-        ecs_os_free(UnsafeMutableRawPointer(mutating: dstVal))
+    if dst.pointee.value != nil {
+        ecs_os_free(UnsafeMutableRawPointer(mutating: dst.pointee.value!))
     }
     dst.pointee.value = src.pointee.value
     dst.pointee.hash = src.pointee.hash
@@ -52,16 +57,16 @@ public func flecs_identifier_move(
     src.pointee.length = 0
 }
 
-// MARK: - Poly Lifecycle
 
 /// Move for EcsPoly - transfers the poly pointer.
 public func flecs_poly_move(
     _ dst: UnsafeMutablePointer<EcsPoly>,
     _ src: UnsafeMutablePointer<EcsPoly>)
 {
-    if let dstPoly = dst.pointee.poly, dstPoly != src.pointee.poly {
-        if let dtor = flecs_get_dtor(dstPoly) {
-            dtor(dstPoly)
+    if dst.pointee.poly != nil && dst.pointee.poly! != src.pointee.poly {
+        let dtor = flecs_get_dtor(dst.pointee.poly!)
+        if dtor != nil {
+            dtor!(dst.pointee.poly!)
         }
     }
     dst.pointee.poly = src.pointee.poly
@@ -72,14 +77,14 @@ public func flecs_poly_move(
 public func flecs_poly_dtor(
     _ ptr: UnsafeMutablePointer<EcsPoly>)
 {
-    if let poly = ptr.pointee.poly {
-        if let dtor = flecs_get_dtor(poly) {
-            dtor(poly)
+    if ptr.pointee.poly != nil {
+        let dtor = flecs_get_dtor(ptr.pointee.poly!)
+        if dtor != nil {
+            dtor!(ptr.pointee.poly!)
         }
     }
 }
 
-// MARK: - Trait Flag Registration
 
 /// Context for trait observers that map traits to component record flags.
 public struct ecs_on_trait_ctx_t {
@@ -104,11 +109,11 @@ public func flecs_assert_relation_unused(
     // Check if id is being cleaned up
     let count = ecs_vec_count(&world.pointee.store.marked_ids)
     if count > 0 {
-        if let ids = ecs_vec_first(&world.pointee.store.marked_ids)?
+        let ids = ecs_vec_first(&world.pointee.store.marked_ids)?
             .bindMemory(to: ecs_marked_id_t.self, capacity: Int(count))
-        {
+        if ids != nil {
             for i in 0..<Int(count) {
-                if ids[i].id == ecs_pair(rel, EcsWildcard) {
+                if ids![i].id == ecs_pair(rel, EcsWildcard) {
                     return
                 }
             }
@@ -172,11 +177,13 @@ public func flecs_register_flag_for_trait(
         var changed = false
 
         if event == EcsOnAdd {
-            if let cr = flecs_components_get(UnsafePointer(world), e) {
-                changed = flecs_set_id_flag(world, cr, flag, trait) || changed
+            let cr1 = flecs_components_get(UnsafePointer(world), e)
+            if cr1 != nil {
+                changed = flecs_set_id_flag(world, cr1!, flag, trait) || changed
             }
-            if let cr = flecs_components_get(UnsafePointer(world), ecs_pair(e, EcsWildcard)) {
-                var cur: UnsafeMutablePointer<ecs_component_record_t>? = cr
+            let cr2 = flecs_components_get(UnsafePointer(world), ecs_pair(e, EcsWildcard))
+            if cr2 != nil {
+                var cur: UnsafeMutablePointer<ecs_component_record_t>? = cr2
                 repeat {
                     changed = flecs_set_id_flag(world, cur!, flag, trait) || changed
                     cur = flecs_component_first_next(cur!)
@@ -186,11 +193,13 @@ public func flecs_register_flag_for_trait(
                 flecs_add_flag(world, e, entity_flag)
             }
         } else if event == EcsOnRemove {
-            if let cr = flecs_components_get(UnsafePointer(world), e) {
-                changed = flecs_unset_id_flag(cr, not_flag) || changed
+            let cr3 = flecs_components_get(UnsafePointer(world), e)
+            if cr3 != nil {
+                changed = flecs_unset_id_flag(cr3!, not_flag) || changed
             }
-            if let cr = flecs_components_get(UnsafePointer(world), ecs_pair(e, EcsWildcard)) {
-                var cur: UnsafeMutablePointer<ecs_component_record_t>? = cr
+            let cr4 = flecs_components_get(UnsafePointer(world), ecs_pair(e, EcsWildcard))
+            if cr4 != nil {
+                var cur: UnsafeMutablePointer<ecs_component_record_t>? = cr4
                 repeat {
                     changed = flecs_unset_id_flag(cur!, not_flag) || changed
                     cur = flecs_component_first_next(cur!)
@@ -204,7 +213,6 @@ public func flecs_register_flag_for_trait(
     }
 }
 
-// MARK: - Bootstrap Helpers
 
 /// Make an entity alive before the root table is initialized.
 public func flecs_bootstrap_make_alive(
@@ -220,8 +228,8 @@ public func flecs_bootstrap_make_alive(
         r.pointee.row = UInt32(root.pointee.data.count)
 
         // Append entity to root table
-        if let entities = root.pointee.data.entities {
-            entities[Int(root.pointee.data.count)] = e
+        if root.pointee.data.entities != nil {
+            root.pointee.data.entities![Int(root.pointee.data.count)] = e
         }
         root.pointee.data.count += 1
     }
@@ -239,7 +247,6 @@ public func flecs_bootstrap_entity(
     ecs_set_name(world, id, name)
 }
 
-// MARK: - Main Bootstrap
 
 /// Initialize the world by bootstrapping all builtin entities and components.
 /// This is the entry point that sets up the entire ECS type system.

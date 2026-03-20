@@ -2,9 +2,14 @@
 /// Translation of ecs_stack_t and its operations from flecs.
 /// Linear/bump allocator with cursor support for temporary allocations.
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Constants
 
 /// Offset of usable data within a stack page (aligned to 16 bytes).
 public let FLECS_STACK_PAGE_OFFSET: Int32 = ECS_ALIGN(
@@ -13,7 +18,6 @@ public let FLECS_STACK_PAGE_OFFSET: Int32 = ECS_ALIGN(
 /// Size of usable data within a stack page.
 public let FLECS_STACK_PAGE_SIZE: Int16 = Int16(1024 - Int(FLECS_STACK_PAGE_OFFSET))
 
-// MARK: - Types
 
 /// A page of memory in the stack allocator.
 public struct ecs_stack_page_t {
@@ -58,7 +62,6 @@ public struct ecs_stack_t {
     }
 }
 
-// MARK: - Internal helpers
 
 private func flecs_stack_page_new(_ page_id: UInt32) -> UnsafeMutablePointer<ecs_stack_page_t> {
     let total_size = Int(FLECS_STACK_PAGE_OFFSET) + Int(FLECS_STACK_PAGE_SIZE)
@@ -71,7 +74,6 @@ private func flecs_stack_page_new(_ page_id: UInt32) -> UnsafeMutablePointer<ecs
     return result
 }
 
-// MARK: - Public API
 
 /// Initialize a stack allocator.
 public func flecs_stack_init(
@@ -85,9 +87,9 @@ public func flecs_stack_fini(
     _ stack: UnsafeMutablePointer<ecs_stack_t>)
 {
     var cur = stack.pointee.first
-    while let c = cur {
-        let next = c.pointee.next
-        free(UnsafeMutableRawPointer(c))
+    while cur != nil {
+        let next = cur!.pointee.next
+        free(UnsafeMutableRawPointer(cur!))
         cur = next
     }
     stack.pointee = ecs_stack_t()
@@ -116,8 +118,8 @@ public func flecs_stack_alloc(
     var next_sp = sp + Int16(size)
 
     if next_sp > FLECS_STACK_PAGE_SIZE {
-        if let n = page.pointee.next {
-            page = n
+        if page.pointee.next != nil {
+            page = page.pointee.next!
         } else {
             let new_page = flecs_stack_page_new(page.pointee.id)
             page.pointee.next = new_page
@@ -138,9 +140,10 @@ public func flecs_stack_calloc(
     _ size: ecs_size_t,
     _ align: ecs_size_t) -> UnsafeMutableRawPointer?
 {
-    guard let ptr = flecs_stack_alloc(stack, size, align) else { return nil }
-    memset(ptr, 0, Int(size))
-    return ptr
+    let ptr = flecs_stack_alloc(stack, size, align)
+    if ptr == nil { return nil }
+    memset(ptr!, 0, Int(size))
+    return ptr!
 }
 
 /// Free memory allocated from the stack.
@@ -170,10 +173,11 @@ public func flecs_stack_get_cursor(
     // Allocate cursor from the stack itself
     let cursor_size = Int32(MemoryLayout<ecs_stack_cursor_t>.stride)
     let cursor_align = Int32(MemoryLayout<ecs_stack_cursor_t>.alignment)
-    guard let raw = flecs_stack_alloc(stack, cursor_size, cursor_align) else {
+    let raw = flecs_stack_alloc(stack, cursor_size, cursor_align)
+    if raw == nil {
         return nil
     }
-    let result = raw.bindMemory(to: ecs_stack_cursor_t.self, capacity: 1)
+    let result = raw!.bindMemory(to: ecs_stack_cursor_t.self, capacity: 1)
     result.pointee.page = page
     result.pointee.sp = sp
     result.pointee.is_free = false
@@ -187,22 +191,22 @@ public func flecs_stack_restore_cursor(
     _ stack: UnsafeMutablePointer<ecs_stack_t>,
     _ cursor: UnsafeMutablePointer<ecs_stack_cursor_t>?)
 {
-    guard let cursor = cursor else { return }
+    if cursor == nil { return }
 
-    cursor.pointee.is_free = true
+    cursor!.pointee.is_free = true
 
     // If cursor is not the last on the stack, no memory should be freed
-    if cursor != stack.pointee.tail_cursor {
+    if cursor! != stack.pointee.tail_cursor {
         return
     }
 
     // Iterate freed cursors to know how much memory we can free
-    var c = cursor
+    var c = cursor!
     while true {
-        guard let prev = c.pointee.prev, prev.pointee.is_free else {
+        if c.pointee.prev == nil || !c.pointee.prev!.pointee.is_free {
             break
         }
-        c = prev
+        c = c.pointee.prev!
     }
 
     stack.pointee.tail_cursor = c.pointee.prev
@@ -215,8 +219,8 @@ public func flecs_stack_reset(
     _ stack: UnsafeMutablePointer<ecs_stack_t>)
 {
     stack.pointee.tail_page = stack.pointee.first
-    if let first = stack.pointee.first {
-        first.pointee.sp = 0
+    if stack.pointee.first != nil {
+        stack.pointee.first!.pointee.sp = 0
     }
     stack.pointee.tail_cursor = nil
 }

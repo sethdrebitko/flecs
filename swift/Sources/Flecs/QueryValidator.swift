@@ -1,9 +1,14 @@
 // QueryValidator.swift - 1:1 translation of flecs query/validator.c
 // Query term validation, finalization, and normalization
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Validator Context
 
 /// Context passed through validation for error reporting.
 public struct ecs_query_validator_ctx_t {
@@ -15,7 +20,6 @@ public struct ecs_query_validator_ctx_t {
     public init() {}
 }
 
-// MARK: - Error Reporting
 
 /// Log a query validation error with context.
 private func flecs_query_validator_error(
@@ -27,7 +31,6 @@ private func flecs_query_validator_error(
     ecs_err("query validation error: %s", msg)
 }
 
-// MARK: - Term Ref Flags
 
 /// Finalize flags on a term reference (EcsIsEntity / EcsIsVariable).
 private func flecs_term_ref_finalize_flags(
@@ -41,11 +44,12 @@ private func flecs_term_ref_finalize_flags(
     }
 
     // Handle $ prefix in names
-    if let name = ref.pointee.name, name.pointee == UInt8(ascii: "$") {
-        if (name + 1).pointee == 0 {
+    let name = ref.pointee.name
+    if name != nil && name!.pointee == UInt8(ascii: "$") {
+        if (name! + 1).pointee == 0 {
             if (ref.pointee.id & EcsIsName) == 0 { return -1 }
         } else {
-            ref.pointee.name = name + 1
+            ref.pointee.name = name! + 1
             ref.pointee.id |= EcsIsVariable
         }
     }
@@ -67,7 +71,6 @@ private func flecs_term_ref_finalize_flags(
     return 0
 }
 
-// MARK: - Term Ref Lookup
 
 /// Resolve a term reference name to an entity id.
 private func flecs_term_ref_lookup(
@@ -76,10 +79,11 @@ private func flecs_term_ref_lookup(
     _ ref: UnsafeMutablePointer<ecs_term_ref_t>,
     _ ctx: UnsafeMutablePointer<ecs_query_validator_ctx_t>) -> Int32
 {
-    guard let name = ref.pointee.name else { return 0 }
+    let name = ref.pointee.name
+    if name == nil { return 0 }
 
     if (ref.pointee.id & EcsIsVariable) != 0 {
-        if strcmp(name, "this") == 0 {
+        if strcmp(name!, "this") == 0 {
             ref.pointee.id = EcsThis | ECS_TERM_REF_FLAGS(ref)
             ref.pointee.name = nil
         }
@@ -91,8 +95,8 @@ private func flecs_term_ref_lookup(
     }
 
     // Check for #0
-    if name.pointee == UInt8(ascii: "#") && (name + 1).pointee == UInt8(ascii: "0") &&
-        (name + 2).pointee == 0
+    if name!.pointee == UInt8(ascii: "#") && (name! + 1).pointee == UInt8(ascii: "0") &&
+        (name! + 2).pointee == 0
     {
         if ECS_TERM_REF_ID(ref) != 0 { return -1 }
         ref.pointee.name = nil
@@ -102,18 +106,19 @@ private func flecs_term_ref_lookup(
     // Look up entity by name
     var e: ecs_entity_t = 0
     if scope != 0 {
-        e = ecs_lookup_child(world, scope, name)
+        e = ecs_lookup_child(world, scope, name!)
     }
     if e == 0 {
-        e = ecs_lookup(world, name)
+        e = ecs_lookup(world, name!)
     }
     if e == 0 {
-        e = ecs_lookup_symbol(world, name, false, false)
+        e = ecs_lookup_symbol(world, name!, false, false)
     }
 
     if e == 0 {
-        if let q = ctx.pointee.query,
-            (q.pointee.flags & EcsQueryAllowUnresolvedByName) != 0
+        let q = ctx.pointee.query
+        if q != nil &&
+            (q!.pointee.flags & EcsQueryAllowUnresolvedByName) != 0
         {
             ref.pointee.id |= EcsIsName
             ref.pointee.id &= ~EcsIsEntity
@@ -130,7 +135,7 @@ private func flecs_term_ref_lookup(
     ref.pointee.id = e | ECS_TERM_REF_FLAGS(ref)
 
     // Check for builtin wildcards
-    if strcmp(name, "*") == 0 || strcmp(name, "_") == 0 || strcmp(name, "$") == 0 {
+    if strcmp(name!, "*") == 0 || strcmp(name!, "_") == 0 || strcmp(name!, "$") == 0 {
         ref.pointee.id &= ~EcsIsEntity
         ref.pointee.id |= EcsIsVariable
     }
@@ -145,7 +150,6 @@ private func flecs_term_ref_lookup(
     return 0
 }
 
-// MARK: - Term Ref Finalization
 
 /// Finalize all references in a term (src, first, second).
 private func flecs_term_refs_finalize(
@@ -211,7 +215,6 @@ private func flecs_term_refs_finalize(
     return 0
 }
 
-// MARK: - Term Id Population
 
 /// Get entity from a term ref (returns Wildcard for variables).
 private func flecs_term_ref_get_entity(
@@ -288,7 +291,6 @@ private func flecs_term_populate_from_id(
     return 0
 }
 
-// MARK: - Term Finalize (Public)
 
 /// Finalize a single term: resolve refs, populate id, set flags.
 public func flecs_term_finalize(
@@ -376,7 +378,6 @@ public func flecs_term_finalize(
     return 0
 }
 
-// MARK: - Term Helpers (Public)
 
 /// Check if a term reference is set.
 public func ecs_term_ref_is_set(
@@ -409,7 +410,6 @@ public func ecs_term_match_0(
         (term.pointee.src.id & EcsIsEntity) != 0
 }
 
-// MARK: - Query Finalize Terms
 
 /// Finalize all terms in a query. This is the main validation entry point.
 public func flecs_query_finalize_terms(
@@ -418,7 +418,8 @@ public func flecs_query_finalize_terms(
     _ desc: UnsafePointer<ecs_query_desc_t>) -> Int32
 {
     let term_count = q.pointee.term_count
-    guard let terms = q.pointee.terms else { return -1 }
+    let terms = q.pointee.terms
+    if terms == nil { return -1 }
     var field_count: Int8 = 0
     var cacheable_terms: Int32 = 0
     var cacheable = true
@@ -432,26 +433,26 @@ public func flecs_query_finalize_terms(
 
     // Mark Or chains
     for i in 0..<Int(term_count) {
-        if terms[i].oper == EcsOr {
-            terms[i].flags_ |= EcsTermIsOr
+        if terms![i].oper == EcsOr {
+            terms![i].flags_ |= EcsTermIsOr
             if i + 1 < Int(term_count) {
-                terms[i + 1].flags_ |= EcsTermIsOr
+                terms![i + 1].flags_ |= EcsTermIsOr
             }
         }
     }
 
     // Finalize each term
     for i in 0..<Int(term_count) {
-        let prev_is_or = i > 0 && terms[i - 1].oper == EcsOr
+        let prev_is_or = i > 0 && terms![i - 1].oper == EcsOr
         ctx.term_index = Int32(i)
 
-        if flecs_term_finalize(UnsafePointer(world), &terms[i], &ctx) != 0 {
+        if flecs_term_finalize(UnsafePointer(world), &terms![i], &ctx) != 0 {
             return -1
         }
 
         // Track cacheability
-        if (terms[i].flags_ & EcsTermIsCacheable) != 0 {
-            if !prev_is_or || (i > 0 && (terms[i - 1].flags_ & EcsTermIsCacheable) != 0) {
+        if (terms![i].flags_ & EcsTermIsCacheable) != 0 {
+            if !prev_is_or || (i > 0 && (terms![i - 1].flags_ & EcsTermIsCacheable) != 0) {
                 cacheable_terms += 1
             }
         }
@@ -460,32 +461,32 @@ public func flecs_query_finalize_terms(
         if !prev_is_or {
             field_count += 1
         }
-        terms[i].field_index = Int8(field_count - 1)
+        terms![i].field_index = Int8(field_count - 1)
 
         // Track MatchThis
-        if ecs_term_match_this(&terms[i]) {
+        if ecs_term_match_this(&terms![i]) {
             q.pointee.flags |= EcsQueryMatchThis
         } else {
             q.pointee.flags &= ~EcsQueryMatchOnlyThis
         }
 
         // Track wildcards
-        if ecs_id_is_wildcard(terms[i].id) {
+        if ecs_id_is_wildcard(terms![i].id) {
             q.pointee.flags |= EcsQueryMatchWildcards
         }
 
         // Toggle check
-        if (terms[i].flags_ & EcsTermIsToggle) != 0 {
+        if (terms![i].flags_ & EcsTermIsToggle) != 0 {
             cacheable = false
         }
 
         // Nodata / inout handling
-        if terms[i].oper == EcsNot && terms[i].inout == EcsInOutDefault {
-            terms[i].inout = EcsInOutNone
+        if terms![i].oper == EcsNot && terms![i].inout == EcsInOutDefault {
+            terms![i].inout = EcsInOutNone
         }
 
         // Sparse handling
-        if (terms[i].flags_ & EcsTermIsSparse) != 0 {
+        if (terms![i].flags_ & EcsTermIsSparse) != 0 {
             cacheable = false
         }
     }
@@ -495,16 +496,18 @@ public func flecs_query_finalize_terms(
     // Populate ids and sizes from terms
     if field_count > 0 {
         for i in 0..<Int(term_count) {
-            let field = Int(terms[i].field_index)
-            q.pointee.ids![field] = terms[i].id
+            let field = Int(terms![i].field_index)
+            q.pointee.ids![field] = terms![i].id
 
-            if !ecs_term_match_0(&terms[i]) {
-                flecs_component_lock(world, terms[i].id)
+            if !ecs_term_match_0(&terms![i]) {
+                flecs_component_lock(world, terms![i].id)
             }
 
-            if let cr = flecs_components_get(UnsafePointer(world), terms[i].id) {
-                if let ti = cr.pointee.type_info {
-                    q.pointee.sizes![field] = ti.pointee.size
+            let cr = flecs_components_get(UnsafePointer(world), terms![i].id)
+            if cr != nil {
+                let ti = cr!.pointee.type_info
+                if ti != nil {
+                    q.pointee.sizes![field] = ti!.pointee.size
                 }
             }
         }
@@ -523,10 +526,10 @@ public func flecs_query_finalize_terms(
         var is_trivial = true
         q.pointee.flags |= EcsQueryMatchOnlySelf
         for i in 0..<Int(term_count) {
-            if (terms[i].src.id & EcsUp) != 0 {
+            if (terms![i].src.id & EcsUp) != 0 {
                 q.pointee.flags &= ~EcsQueryMatchOnlySelf
             }
-            if (terms[i].flags_ & EcsTermIsTrivial) == 0 {
+            if (terms![i].flags_ & EcsTermIsTrivial) == 0 {
                 is_trivial = false
             }
         }
@@ -538,7 +541,6 @@ public func flecs_query_finalize_terms(
     return 0
 }
 
-// MARK: - Main Query Finalization
 
 /// Top-level query finalization: populate terms, validate, tokenize.
 public func flecs_query_finalize_query(
@@ -550,12 +552,9 @@ public func flecs_query_finalize_query(
 
     // Allocate temporary term/size/id arrays
     let max_terms = Int(FLECS_TERM_COUNT_MAX)
-    let terms_buf = UnsafeMutablePointer<ecs_term_t>.allocate(capacity: max_terms)
-    terms_buf.initialize(repeating: ecs_term_t(), count: max_terms)
-    let sizes_buf = UnsafeMutablePointer<ecs_size_t>.allocate(capacity: max_terms)
-    sizes_buf.initialize(repeating: 0, count: max_terms)
-    let ids_buf = UnsafeMutablePointer<ecs_id_t>.allocate(capacity: max_terms)
-    ids_buf.initialize(repeating: 0, count: max_terms)
+    let terms_buf = ecs_os_calloc_n(ecs_term_t.self, Int32(max_terms))!
+    let sizes_buf = ecs_os_calloc_n(ecs_size_t.self, Int32(max_terms))!
+    let ids_buf = ecs_os_calloc_n(ecs_id_t.self, Int32(max_terms))!
 
     q.pointee.terms = terms_buf
     q.pointee.sizes = sizes_buf

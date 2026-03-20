@@ -2,9 +2,14 @@
 // and query/compiler/compiler_term.c
 // Query program compilation: variable management and op generation
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Variable Lookup
 
 /// Find a query variable by name and kind.
 public func flecs_query_find_var_id(
@@ -46,7 +51,6 @@ public func flecs_query_find_var_id(
     return flecs_query_find_var_id(query, name, .table)
 }
 
-// MARK: - Variable Creation
 
 /// Add a variable to the query during compilation.
 public func flecs_query_add_var(
@@ -58,42 +62,43 @@ public func flecs_query_add_var(
     var resolved_kind = kind
 
     // Check for lookup variables (contain '.')
-    if let name = name {
-        if strchr(name, Int32(UInt8(ascii: "."))) != nil {
+    if name != nil {
+        if strchr(name!, Int32(UInt8(ascii: "."))) != nil {
             resolved_kind = .entity  // Lookup vars are always entities
         }
     }
 
     // Check if variable already exists
-    if let name = name {
+    if name != nil {
         if resolved_kind == .any {
             var id = flecs_query_find_var_id(
-                UnsafePointer(query), name, .entity)
+                UnsafePointer(query), name!, .entity)
             if id != EcsVarNone { return id }
             id = flecs_query_find_var_id(
-                UnsafePointer(query), name, .table)
+                UnsafePointer(query), name!, .table)
             if id != EcsVarNone { return id }
             resolved_kind = .table
         } else {
             let id = flecs_query_find_var_id(
-                UnsafePointer(query), name, resolved_kind)
+                UnsafePointer(query), name!, resolved_kind)
             if id != EcsVarNone { return id }
         }
     }
 
     // Create new variable
     var result: ecs_var_id_t
-    if let vars = vars {
+    if vars != nil {
         let elem_size = Int32(MemoryLayout<ecs_query_var_t>.stride)
-        guard let ptr = ecs_vec_append(nil, vars, elem_size)?
-            .bindMemory(to: ecs_query_var_t.self, capacity: 1) else {
+        let ptr_raw = ecs_vec_append(nil, vars!, elem_size)
+        if ptr_raw == nil {
             return EcsVarNone
         }
+        let ptr = ptr_raw!.bindMemory(to: ecs_query_var_t.self, capacity: 1)
         ptr.pointee = ecs_query_var_t()
-        result = flecs_itovar(Int64(ecs_vec_count(vars)))
+        result = flecs_itovar(Int64(ecs_vec_count(vars!)))
         ptr.pointee.id = result
     } else {
-        guard query.pointee.var_count < query.pointee.var_size else {
+        if query.pointee.var_count >= query.pointee.var_size {
             return EcsVarNone
         }
         let v = query.pointee.vars! + Int(query.pointee.var_count)
@@ -120,7 +125,7 @@ public func flecs_query_add_var(
     v.pointee.lookup = nil
 
     // Register in name index
-    if let name = name {
+    if name != nil {
         let var_index: UnsafeMutablePointer<ecs_hashmap_t>
         if resolved_kind == .table {
             var_index = withUnsafeMutablePointer(to: &query.pointee.tvar_index) { $0 }
@@ -128,19 +133,19 @@ public func flecs_query_add_var(
             var_index = withUnsafeMutablePointer(to: &query.pointee.evar_index) { $0 }
         }
         flecs_name_index_init_if(var_index, nil)
-        flecs_name_index_ensure(var_index, UInt64(v.pointee.id), name, 0, 0)
-        v.pointee.anonymous = name.pointee == UInt8(ascii: "_")
+        flecs_name_index_ensure(var_index, UInt64(v.pointee.id), name!, 0, 0)
+        v.pointee.anonymous = name!.pointee == UInt8(ascii: "_")
 
         // Handle lookup variables (e.g. $this.wheel)
-        if let dot = strchr(name, Int32(UInt8(ascii: "."))) {
-            v.pointee.lookup = dot + 1
+        let dot = strchr(name!, Int32(UInt8(ascii: ".")))
+        if dot != nil {
+            v.pointee.lookup = dot! + 1
         }
     }
 
     return result
 }
 
-// MARK: - Most Specific Variable
 
 /// Find the most specific variable (entity preferred over table when written).
 public func flecs_query_most_specific_var(
@@ -166,25 +171,25 @@ public func flecs_query_most_specific_var(
     return tvar != EcsVarNone ? tvar : evar
 }
 
-// MARK: - Op Insertion
 
 /// Insert an operation into the ops vector.
 public func flecs_query_op_insert(
     _ op: UnsafePointer<ecs_query_op_t>,
     _ ctx: UnsafeMutablePointer<ecs_query_compile_ctx_t>) -> ecs_query_lbl_t
 {
-    guard let ops = ctx.pointee.ops else { return -1 }
+    let ops = ctx.pointee.ops
+    if ops == nil { return -1 }
     let elem_size = Int32(MemoryLayout<ecs_query_op_t>.stride)
-    guard let ptr = ecs_vec_append(nil, ops, elem_size)?
-        .bindMemory(to: ecs_query_op_t.self, capacity: 1) else {
+    let ptr_raw = ecs_vec_append(nil, ops!, elem_size)
+    if ptr_raw == nil {
         return -1
     }
+    let ptr = ptr_raw!.bindMemory(to: ecs_query_op_t.self, capacity: 1)
     ptr.pointee = op.pointee
-    ptr.pointee.next = flecs_itolbl(Int64(ecs_vec_count(ops)))
-    return flecs_itolbl(Int64(ecs_vec_count(ops)) - 1)
+    ptr.pointee.next = flecs_itolbl(Int64(ecs_vec_count(ops!)))
+    return flecs_itolbl(Int64(ecs_vec_count(ops!)) - 1)
 }
 
-// MARK: - Query Compilation
 
 /// Compile a query into an executable program of operations.
 /// This is the main entry point for the query compiler.
@@ -204,8 +209,8 @@ public func flecs_query_compile(
         impl.pointee.var_size = 1
 
         // Allocate vars array
-        impl.pointee.vars = UnsafeMutablePointer<ecs_query_var_t>.allocate(capacity: 1)
-        impl.pointee.vars!.initialize(to: ecs_query_var_t())
+        impl.pointee.vars = ecs_os_calloc_t(ecs_query_var_t.self)!
+        impl.pointee.vars!.pointee = ecs_query_var_t()
         impl.pointee.vars![0].kind = Int8(ecs_var_kind_t.table.rawValue)
         impl.pointee.vars![0].name = EcsThisName.withCString { strdup($0) }
     }
@@ -219,13 +224,14 @@ public func flecs_query_compile(
     ctx.ops = withUnsafeMutablePointer(to: &ops_vec) { $0 }
 
     // Compile each term into operations
-    guard let terms = q.pointee.terms else {
+    let terms = q.pointee.terms
+    if terms == nil {
         ecs_vec_fini(nil, &ops_vec, elem_size)
         return 0
     }
 
     for i in 0..<Int(term_count) {
-        let term = terms[i]
+        let term = terms![i]
 
         // Generate appropriate operation based on term properties
         var op = ecs_query_op_t()
@@ -292,12 +298,11 @@ public func flecs_query_compile(
     // Copy ops to query impl
     let op_count = ecs_vec_count(&ops_vec)
     if op_count > 0 {
-        impl.pointee.ops = UnsafeMutablePointer<ecs_query_op_t>
-            .allocate(capacity: Int(op_count))
-        if let src = ecs_vec_first(&ops_vec)?
-            .bindMemory(to: ecs_query_op_t.self, capacity: Int(op_count))
-        {
-            impl.pointee.ops!.update(from: src, count: Int(op_count))
+        impl.pointee.ops = ecs_os_calloc_n(ecs_query_op_t.self, op_count)!
+        let src = ecs_vec_first(&ops_vec)
+        if src != nil {
+            let src_typed = src!.bindMemory(to: ecs_query_op_t.self, capacity: Int(op_count))
+            impl.pointee.ops!.update(from: src_typed, count: Int(op_count))
         }
         impl.pointee.op_count = op_count
     }
@@ -307,7 +312,6 @@ public func flecs_query_compile(
     return 0
 }
 
-// MARK: - Query Finalization
 
 /// Finalize and validate a query (term validation, flag computation).
 public func flecs_query_finalize_query(
@@ -315,7 +319,8 @@ public func flecs_query_finalize_query(
     _ q: UnsafeMutablePointer<ecs_query_t>,
     _ desc: UnsafeMutablePointer<ecs_query_desc_t>) -> Int32
 {
-    guard let terms = q.pointee.terms else { return -1 }
+    let terms = q.pointee.terms
+    if terms == nil { return -1 }
     let term_count = Int(q.pointee.term_count)
     if term_count == 0 { return -1 }
 
@@ -326,7 +331,7 @@ public func flecs_query_finalize_query(
     var is_cacheable = true
 
     for i in 0..<term_count {
-        let term = terms[i]
+        let term = terms![i]
 
         // Check if any term matches $this
         if (term.src.id & EcsIsVariable) != 0 {
@@ -351,9 +356,11 @@ public func flecs_query_finalize_query(
         q.pointee.ids![i] = term.id
 
         // Set sizes from type info
-        if let cr = flecs_components_get(UnsafePointer(world), term.id) {
-            if let ti = cr.pointee.type_info {
-                q.pointee.sizes![i] = ti.pointee.size
+        let cr = flecs_components_get(UnsafePointer(world), term.id)
+        if cr != nil {
+            let ti = cr!.pointee.type_info
+            if ti != nil {
+                q.pointee.sizes![i] = ti!.pointee.size
             }
 
             // Lock component record to prevent deletion while query is alive
@@ -381,7 +388,6 @@ public func flecs_query_finalize_query(
     return 0
 }
 
-// MARK: - Query Finalize Simple
 
 /// Fast-path query finalization for simple single-term queries.
 /// Returns true if the query was successfully finalized as simple.
@@ -410,11 +416,9 @@ public func flecs_query_finalize_simple(
 
     // Allocate arrays
     let count = Int(term_count)
-    q.pointee.terms = UnsafeMutablePointer<ecs_term_t>.allocate(capacity: count)
-    q.pointee.sizes = UnsafeMutablePointer<ecs_size_t>.allocate(capacity: count)
-    q.pointee.sizes!.initialize(repeating: 0, count: count)
-    q.pointee.ids = UnsafeMutablePointer<ecs_id_t>.allocate(capacity: count)
-    q.pointee.ids!.initialize(repeating: 0, count: count)
+    q.pointee.terms = ecs_os_calloc_n(ecs_term_t.self, Int32(count))!
+    q.pointee.sizes = ecs_os_calloc_n(ecs_size_t.self, Int32(count))!
+    q.pointee.ids = ecs_os_calloc_n(ecs_id_t.self, Int32(count))!
 
     // Copy terms
     withUnsafePointer(to: desc.pointee.terms) { termsPtr in

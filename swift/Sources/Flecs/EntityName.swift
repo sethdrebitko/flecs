@@ -1,21 +1,25 @@
 // EntityName.swift - 1:1 translation of flecs entity_name.c
 // Functions for working with named entities: paths, lookups, scoping
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Constants
 
 private let ECS_NAME_BUFFER_LENGTH: Int32 = 64
 
-// MARK: - Internal Helpers
 
 /// Check if name is a numeric id reference (starts with '#')
 public func flecs_name_is_id_full(
     _ name: UnsafePointer<CChar>?) -> Bool
 {
-    guard let name = name else { return false }
-    guard name[0] == CChar(UInt8(ascii: "#")) else { return false }
-    var ptr = name.advanced(by: 1)
+    if name == nil { return false }
+    if name![0] != CChar(UInt8(ascii: "#")) { return false }
+    var ptr = name!.advanced(by: 1)
     while ptr.pointee != 0 {
         if !(ptr.pointee >= CChar(UInt8(ascii: "0")) && ptr.pointee <= CChar(UInt8(ascii: "9"))) {
             return false
@@ -29,8 +33,8 @@ public func flecs_name_is_id_full(
 public func flecs_name_to_id_full(
     _ name: UnsafePointer<CChar>?) -> ecs_entity_t
 {
-    guard let name = name, name[0] == CChar(UInt8(ascii: "#")) else { return 0 }
-    let res = UInt64(atoll(name.advanced(by: 1)))
+    if name == nil || name![0] != CChar(UInt8(ascii: "#")) { return 0 }
+    let res = UInt64(atoll(name!.advanced(by: 1)))
     if res >= UInt64(UInt32.max) {
         return 0
     }
@@ -71,8 +75,8 @@ private func flecs_is_root_path(
     _ path: UnsafePointer<CChar>,
     _ prefix: UnsafePointer<CChar>?) -> Bool
 {
-    guard let prefix = prefix else { return false }
-    return strncmp(path, prefix, strlen(prefix)) == 0
+    if prefix == nil { return false }
+    return strncmp(path, prefix!, strlen(prefix!)) == 0
 }
 
 /// Extract the next path element between separators.
@@ -84,8 +88,8 @@ public func flecs_path_elem(
     _ size_out: UnsafeMutablePointer<ecs_size_t>?) -> UnsafePointer<CChar>?
 {
     var buffer: UnsafeMutablePointer<CChar>? = nil
-    if let buffer_out = buffer_out {
-        buffer = buffer_out.pointee
+    if buffer_out != nil {
+        buffer = buffer_out!.pointee
     }
 
     var template_nesting: Int32 = 0
@@ -118,14 +122,14 @@ public func flecs_path_elem(
             }
         }
 
-        if let buffer = buffer {
+        if buffer != nil {
             if pos >= (size - 1) {
                 if size == ECS_NAME_BUFFER_LENGTH {
-                    let new_buffer = UnsafeMutablePointer<CChar>.allocate(capacity: Int(size * 2 + 1))
-                    memcpy(new_buffer, buffer, Int(size))
+                    let new_buffer = ecs_os_calloc_n(CChar.self, Int32(size * 2 + 1))!
+                    memcpy(new_buffer, buffer!, Int(size))
                     buffer_out?.pointee = new_buffer
                 } else {
-                    let new_buffer = realloc(buffer, Int(size * 2 + 1))!
+                    let new_buffer = realloc(buffer!, Int(size * 2 + 1))!
                         .bindMemory(to: CChar.self, capacity: Int(size * 2 + 1))
                     buffer_out?.pointee = new_buffer
                 }
@@ -138,10 +142,10 @@ public func flecs_path_elem(
         ptr = ptr.advanced(by: 1)
     }
 
-    if let buffer_out = buffer_out, let buf = buffer_out.pointee {
-        buf[Int(pos)] = 0
-        if let size_out = size_out {
-            size_out.pointee = size
+    if buffer_out != nil && buffer_out!.pointee != nil {
+        buffer_out!.pointee![Int(pos)] = 0
+        if size_out != nil {
+            size_out!.pointee = size
         }
     }
 
@@ -166,8 +170,8 @@ public func flecs_get_parent_from_path(
     var path = path_ptr.pointee
 
     if flecs_is_root_path(path, prefix) {
-        if let prefix = prefix {
-            path = path.advanced(by: strlen(prefix))
+        if prefix != nil {
+            path = path.advanced(by: strlen(prefix!))
         }
         parent = 0
         start_from_root = true
@@ -199,7 +203,6 @@ public func flecs_get_parent_from_path(
     return parent
 }
 
-// MARK: - Public Path API
 
 /// Get the full path of an entity as a string
 public func ecs_get_path_w_sep(
@@ -240,7 +243,6 @@ public func ecs_get_path_w_sep_buf(
     ecs_strbuf_appendint(buf, Int64(child & UInt64(UInt32.max)))
 }
 
-// MARK: - Scope Management
 
 /// Set name prefix for automatic name stripping.
 public func ecs_set_name_prefix(

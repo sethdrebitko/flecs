@@ -1,9 +1,14 @@
 // Observer.swift - 1:1 translation of flecs observer.c
 // Observer creation, registration, matching, and invocation
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Observer Types
 
 /// Observer implementation (internal state beyond the public ecs_observer_t).
 public struct ecs_observer_impl_t {
@@ -29,7 +34,6 @@ public let EcsObserverBypassQuery: ecs_flags32_t     = 1 << 4
 public let EcsObserverYieldOnCreate: ecs_flags32_t   = 1 << 5
 public let EcsObserverYieldOnDelete: ecs_flags32_t   = 1 << 6
 
-// MARK: - Observer Accessor
 
 /// Get the implementation struct from a public observer pointer.
 @inline(__always)
@@ -40,7 +44,6 @@ public func flecs_observer_impl(
         .bindMemory(to: ecs_observer_impl_t.self, capacity: 1)
 }
 
-// MARK: - Event Mapping
 
 /// Get the effective event for an observer term.
 /// Not operators reverse OnAdd<->OnRemove.
@@ -48,8 +51,8 @@ public func flecs_get_observer_event(
     _ term: UnsafePointer<ecs_term_t>?,
     _ event: ecs_entity_t) -> ecs_entity_t
 {
-    guard let term = term else { return event }
-    if term.pointee.oper == EcsNot {
+    if term == nil { return event }
+    if term!.pointee.oper == EcsNot {
         if event == EcsOnAdd || event == EcsOnSet {
             return EcsOnRemove
         } else if event == EcsOnRemove {
@@ -75,7 +78,6 @@ public func flecs_id_flag_for_event(
     return 0
 }
 
-// MARK: - Observer Count Management
 
 /// Increment/decrement observer count for an event+id combination.
 /// When count transitions 0<->1, notifies tables and sets cr flags.
@@ -93,15 +95,17 @@ public func flecs_inc_observer_count(
     if result == 1 {
         let flags = flecs_id_flag_for_event(event)
         if flags != 0 {
-            if let cr = flecs_components_get(UnsafePointer(world), id) {
-                cr.pointee.flags |= flags
+            let cr = flecs_components_get(UnsafePointer(world), id)
+            if cr != nil {
+                cr!.pointee.flags |= flags
             }
         }
     } else if result == 0 {
         let flags = flecs_id_flag_for_event(event)
         if flags != 0 {
-            if let cr = flecs_components_get(UnsafePointer(world), id) {
-                cr.pointee.flags &= ~flags
+            let cr = flecs_components_get(UnsafePointer(world), id)
+            if cr != nil {
+                cr!.pointee.flags &= ~flags
             }
         }
 
@@ -109,7 +113,6 @@ public func flecs_inc_observer_count(
     }
 }
 
-// MARK: - Observer Id Resolution
 
 /// Normalize observer id: replace Any with Wildcard in pairs.
 public func flecs_observer_id(_ id: ecs_id_t) -> ecs_id_t {
@@ -125,7 +128,6 @@ public func flecs_observer_id(_ id: ecs_id_t) -> ecs_id_t {
     return result
 }
 
-// MARK: - Observer Registration
 
 /// Register a single-term observer for a specific event and id.
 private func flecs_register_observer_for_event_and_id(
@@ -239,7 +241,6 @@ public func flecs_unregister_observer(
     _ = flags
 }
 
-// MARK: - Observer Filtering
 
 /// Check if an observer should be ignored for a given table/event.
 public func flecs_ignore_observer(
@@ -249,8 +250,8 @@ public func flecs_ignore_observer(
 {
     let impl = flecs_observer_impl(o)
 
-    if let last = impl.pointee.last_event_id {
-        if last.pointee == it.pointee.event_cur {
+    if impl.pointee.last_event_id != nil {
+        if impl.pointee.last_event_id!.pointee == it.pointee.event_cur {
             return true
         }
     }
@@ -270,14 +271,13 @@ public func flecs_ignore_observer(
     return result
 }
 
-// MARK: - Observer Invocation
 
 /// Invoke an observer's callback or run function.
 public func flecs_observer_invoke(
     _ o: UnsafeMutablePointer<ecs_observer_t>,
     _ it: UnsafeMutablePointer<ecs_iter_t>)
 {
-    if let run = o.pointee.run {
+    if o.pointee.run != nil {
         it.pointee.next = flecs_default_next_callback
         it.pointee.callback = o.pointee.callback
         it.pointee.interrupted_by = 0
@@ -286,10 +286,10 @@ public func flecs_observer_invoke(
         } else {
             it.pointee.ctx = o.pointee.ctx
         }
-        run(it)
-    } else if let callback = o.pointee.callback {
-        it.pointee.callback = callback
-        callback(it)
+        o.pointee.run!(it)
+    } else if o.pointee.callback != nil {
+        it.pointee.callback = o.pointee.callback
+        o.pointee.callback!(it)
     }
 }
 
@@ -301,16 +301,17 @@ public func flecs_observers_invoke(
     _ table: UnsafeMutablePointer<ecs_table_t>,
     _ trav: ecs_entity_t)
 {
-    guard ecs_map_is_init(observers) else { return }
+    if !ecs_map_is_init(observers) { return }
 
     ecs_table_lock(it.pointee.world, table)
 
     var oit = ecs_map_iter(observers)
     while ecs_map_next(&oit) {
-        guard let o: UnsafeMutablePointer<ecs_observer_t> = ecs_map_ptr(&oit) else {
+        let o: UnsafeMutablePointer<ecs_observer_t>? = ecs_map_ptr(&oit)
+        if o == nil {
             continue
         }
-        flecs_uni_observer_invoke(world, o, it, table, trav)
+        flecs_uni_observer_invoke(world, o!, it, table, trav)
     }
 
     ecs_table_unlock(it.pointee.world, table)
@@ -377,22 +378,20 @@ private func flecs_uni_observer_invoke(
     world.pointee.info.observers_ran_total += 1
 }
 
-// MARK: - Default Next Callback
 
 /// Default next callback for observers that use run+next pattern.
 public func flecs_default_next_callback(
     _ it: UnsafeMutablePointer<ecs_iter_t>?) -> Bool
 {
-    guard let it = it else { return false }
-    if it.pointee.interrupted_by != 0 {
+    if it == nil { return false }
+    if it!.pointee.interrupted_by != 0 {
         return false
     } else {
-        it.pointee.interrupted_by = it.pointee.system
+        it!.pointee.interrupted_by = it!.pointee.system
         return true
     }
 }
 
-// MARK: - Observer Init/Fini
 
 /// Initialize a single-term observer.
 private func flecs_uni_observer_init(
@@ -423,8 +422,8 @@ private func flecs_uni_observer_init(
         }
     }
 
-    guard let observable = o.pointee.observable else { return -1 }
-    flecs_uni_observer_register(world, observable, o)
+    if o.pointee.observable == nil { return -1 }
+    flecs_uni_observer_register(world, o.pointee.observable!, o)
     return 0
 }
 
@@ -432,7 +431,8 @@ private func flecs_uni_observer_init(
 public func flecs_observer_fini(
     _ o: UnsafeMutablePointer<ecs_observer_t>)
 {
-    guard let world = o.pointee.world else { return }
+    if o.pointee.world == nil { return }
+    let world = o.pointee.world!
     let impl = flecs_observer_impl(o)
 
     if (impl.pointee.flags & EcsObserverYieldOnDelete) != 0 {
@@ -442,42 +442,41 @@ public func flecs_observer_fini(
     if (impl.pointee.flags & EcsObserverIsMulti) != 0 {
         let children_count = ecs_vec_count(&impl.pointee.children)
         if children_count > 0 {
-            if let children = ecs_vec_first(&impl.pointee.children)?
+            let children = ecs_vec_first(&impl.pointee.children)?
                 .bindMemory(to: UnsafeMutablePointer<ecs_observer_t>.self,
                            capacity: Int(children_count))
-            {
+            if children != nil {
                 for i in 0..<Int(children_count) {
-                    flecs_observer_fini(children[i])
+                    flecs_observer_fini(children![i])
                 }
             }
         }
-        impl.pointee.last_event_id?.deallocate()
+        if impl.pointee.last_event_id != nil { ecs_os_free(UnsafeMutableRawPointer(impl.pointee.last_event_id)) }
     } else {
-        if let observable = o.pointee.observable {
-            flecs_unregister_observer(world, observable, o)
+        if o.pointee.observable != nil {
+            flecs_unregister_observer(world, o.pointee.observable!, o)
         }
     }
 
-    if let query = o.pointee.query {
-        ecs_query_fini(query)
+    if o.pointee.query != nil {
+        ecs_query_fini(o.pointee.query!)
     }
 
-    if let not_query = impl.pointee.not_query {
-        ecs_query_fini(not_query)
+    if impl.pointee.not_query != nil {
+        ecs_query_fini(impl.pointee.not_query!)
     }
 
-    if let ctx_free = o.pointee.ctx_free {
-        ctx_free(o.pointee.ctx)
+    if o.pointee.ctx_free != nil {
+        o.pointee.ctx_free!(o.pointee.ctx)
     }
-    if let callback_ctx_free = o.pointee.callback_ctx_free {
-        callback_ctx_free(o.pointee.callback_ctx)
+    if o.pointee.callback_ctx_free != nil {
+        o.pointee.callback_ctx_free!(o.pointee.callback_ctx)
     }
-    if let run_ctx_free = o.pointee.run_ctx_free {
-        run_ctx_free(o.pointee.run_ctx)
+    if o.pointee.run_ctx_free != nil {
+        o.pointee.run_ctx_free!(o.pointee.run_ctx)
     }
 }
 
-// MARK: - Yield Existing
 
 /// Invoke observer for all existing matches (used for yield_existing).
 private func flecs_observer_yield_existing(
@@ -501,7 +500,6 @@ private func flecs_observer_yield_existing(
     ecs_defer_end(world)
 }
 
-// MARK: - Observer Disable
 
 /// Set or clear a disable bit on an observer and its children.
 public func flecs_observer_set_disable_bit(
@@ -510,20 +508,22 @@ public func flecs_observer_set_disable_bit(
     _ bit: ecs_flags32_t,
     _ cond: Bool)
 {
-    guard let poly = ecs_get_pair(world, e, EcsPoly, EcsObserver) else { return }
-    guard let o = poly.pointee.poly?.bindMemory(
-        to: ecs_observer_t.self, capacity: 1) else { return }
+    let poly = ecs_get_pair(world, e, EcsPoly, EcsObserver)
+    if poly == nil { return }
+    let o = poly!.pointee.poly?.bindMemory(
+        to: ecs_observer_t.self, capacity: 1)
+    if o == nil { return }
 
-    let impl = flecs_observer_impl(o)
+    let impl = flecs_observer_impl(o!)
     if (impl.pointee.flags & EcsObserverIsMulti) != 0 {
         let children_count = ecs_vec_count(&impl.pointee.children)
         if children_count > 0 {
-            if let children = ecs_vec_first(&impl.pointee.children)?
+            let children = ecs_vec_first(&impl.pointee.children)?
                 .bindMemory(to: UnsafeMutablePointer<ecs_observer_t>.self,
                            capacity: Int(children_count))
-            {
+            if children != nil {
                 for i in 0..<Int(children_count) {
-                    let child_impl = flecs_observer_impl(children[i])
+                    let child_impl = flecs_observer_impl(children![i])
                     if cond {
                         child_impl.pointee.flags |= bit
                     } else {
@@ -541,7 +541,6 @@ public func flecs_observer_set_disable_bit(
     }
 }
 
-// MARK: - Public API
 
 /// Get observer pointer from entity.
 public func ecs_observer_get(

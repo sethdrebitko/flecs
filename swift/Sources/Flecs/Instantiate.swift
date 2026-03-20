@@ -1,9 +1,14 @@
 // Instantiate.swift - 1:1 translation of flecs instantiate.c
 // Prefab instantiation (IsA relationship) implementation
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Instantiation Context
 
 /// Context passed during recursive prefab instantiation.
 public struct ecs_instantiate_ctx_t {
@@ -15,7 +20,6 @@ public struct ecs_instantiate_ctx_t {
     }
 }
 
-// MARK: - Slot Instantiation
 
 /// Wire up a slot relationship between a base and an instance child.
 private func flecs_instantiate_slot(
@@ -29,19 +33,21 @@ private func flecs_instantiate_slot(
     if base == slot_of {
         // Instance inherits from slot_of, add slot to instance
         let cr = flecs_components_ensure(world, ecs_pair(slot, child))
-        guard let r = flecs_entities_get(UnsafePointer(world), instance) else { return }
-        flecs_sparse_on_add_cr(world, r.pointee.table, ECS_RECORD_TO_ROW(r.pointee.row), cr, true, nil)
+        let r = flecs_entities_get(UnsafePointer(world), instance)
+        if r == nil { return }
+        flecs_sparse_on_add_cr(world, r!.pointee.table, ECS_RECORD_TO_ROW(r!.pointee.row), cr, true, nil)
     } else {
         // Travel hierarchy upward to find instance that inherits from slot_of
         var parent = instance
         var depth: Int32 = 0
         repeat {
             if ecs_has_pair(world, parent, EcsIsA, slot_of) {
-                guard let name = ecs_get_name(world, slot) else { return }
+                let name = ecs_get_name(world, slot)
+                if name == nil { return }
 
                 var resolved_slot: ecs_entity_t
                 if depth == 0 {
-                    resolved_slot = ecs_lookup_child(world, slot_of, name)
+                    resolved_slot = ecs_lookup_child(world, slot_of, name!)
                 } else {
                     let path = ecs_get_path_w_sep(world, parent, child, ".", nil)
                     resolved_slot = ecs_lookup_path_w_sep(world, slot_of, path, ".", nil, false)
@@ -61,7 +67,6 @@ private func flecs_instantiate_slot(
     }
 }
 
-// MARK: - Child Type Insert
 
 /// Insert an id into a sorted type array, returning the insertion index.
 /// Returns -1 if the id is already present.
@@ -71,8 +76,8 @@ private func flecs_child_type_insert(
     _ id: ecs_id_t) -> Int32
 {
     let count = type.pointee.count
-    guard let array = type.pointee.array else {
-        type.pointee.array = UnsafeMutablePointer<ecs_id_t>.allocate(capacity: 1)
+    if type.pointee.array == nil {
+        type.pointee.array = ecs_os_calloc_t(ecs_id_t.self)!
         type.pointee.array![0] = id
         component_data[0] = nil
         type.pointee.count = 1
@@ -81,7 +86,7 @@ private func flecs_child_type_insert(
 
     var i: Int32 = 0
     while i < count {
-        let cur = array[Int(i)]
+        let cur = type.pointee.array![Int(i)]
         if cur == id { return -1 }
         if cur > id { break }
         i += 1
@@ -90,18 +95,17 @@ private func flecs_child_type_insert(
     // Shift elements to make room
     let to_move = count - i
     if to_move > 0 {
-        (array + Int(i) + 1).update(from: array + Int(i), count: Int(to_move))
+        (type.pointee.array! + Int(i) + 1).update(from: type.pointee.array! + Int(i), count: Int(to_move))
         (component_data + Int(i) + 1).update(from: component_data + Int(i), count: Int(to_move))
     }
 
     component_data[Int(i)] = nil
-    array[Int(i)] = id
+    type.pointee.array![Int(i)] = id
     type.pointee.count = count + 1
 
     return i
 }
 
-// MARK: - Sparse Component Instantiation
 
 /// Copy sparse components from base children to instance children.
 public func flecs_instantiate_sparse(
@@ -117,7 +121,8 @@ public func flecs_instantiate_sparse(
         return
     }
 
-    guard let trs = base_child_table.pointee._.pointee.records else { return }
+    if base_child_table.pointee._.pointee.records == nil { return }
+    let trs = base_child_table.pointee._.pointee.records!
     let count = base_child_table.pointee.type.count
 
     for i in 0..<Int(count) {
@@ -128,23 +133,25 @@ public func flecs_instantiate_sparse(
             continue
         }
 
-        guard let ti = cr.pointee.type_info else { continue }
+        if cr.pointee.type_info == nil { continue }
+        let ti = cr.pointee.type_info!
 
         for j in 0..<Int(base_child_range.pointee.count) {
             let child = base_children[j + Int(base_child_range.pointee.offset)]
             let instance_child = instance_children[j]
 
-            guard let src_ptr = flecs_sparse_get(
-                cr.pointee.sparse, ti.pointee.size, child) else { continue }
-            guard let dst_ptr = flecs_sparse_get(
-                cr.pointee.sparse, ti.pointee.size, instance_child) else { continue }
+            let src_ptr = flecs_sparse_get(
+                cr.pointee.sparse, ti.pointee.size, child)
+            if src_ptr == nil { continue }
+            let dst_ptr = flecs_sparse_get(
+                cr.pointee.sparse, ti.pointee.size, instance_child)
+            if dst_ptr == nil { continue }
 
-            flecs_type_info_copy(dst_ptr, src_ptr, 1, UnsafePointer(ti))
+            flecs_type_info_copy(dst_ptr!, src_ptr!, 1, UnsafePointer(ti))
         }
     }
 }
 
-// MARK: - Non-Fragmenting Component Instantiation
 
 /// Copy non-fragmenting (sparse) components from a base to an instance.
 public func flecs_instantiate_dont_fragment(
@@ -153,34 +160,34 @@ public func flecs_instantiate_dont_fragment(
     _ instance: ecs_entity_t)
 {
     var cur = world.pointee.cr_non_fragmenting_head
-    while let c = cur {
-        if c.pointee.sparse != nil &&
-            (c.pointee.flags & EcsIdOnInstantiateInherit) == 0 &&
-            !ecs_id_is_wildcard(c.pointee.id)
+    while cur != nil {
+        if cur!.pointee.sparse != nil &&
+            (cur!.pointee.flags & EcsIdOnInstantiateInherit) == 0 &&
+            !ecs_id_is_wildcard(cur!.pointee.id)
         {
-            if flecs_component_sparse_has(c, base) {
-                let base_ptr = flecs_component_sparse_get(world, c, nil, base)
-                let ti = c.pointee.type_info
+            if flecs_component_sparse_has(cur!, base) {
+                let base_ptr = flecs_component_sparse_get(world, cur!, nil, base)
+                let ti = cur!.pointee.type_info
 
-                guard let r = flecs_entities_get(UnsafePointer(world), instance) else {
-                    cur = c.pointee.non_fragmenting.next
+                let r = flecs_entities_get(UnsafePointer(world), instance)
+                if r == nil {
+                    cur = cur!.pointee.non_fragmenting.next
                     continue
                 }
 
                 var ptr: UnsafeMutableRawPointer? = nil
-                flecs_sparse_on_add_cr(world, r.pointee.table,
-                    ECS_RECORD_TO_ROW(r.pointee.row), c, true, &ptr)
+                flecs_sparse_on_add_cr(world, r!.pointee.table,
+                    ECS_RECORD_TO_ROW(r!.pointee.row), cur!, true, &ptr)
 
-                if let ti = ti, let ptr = ptr {
-                    flecs_type_info_copy(ptr, base_ptr, 1, UnsafePointer(ti))
+                if ti != nil && ptr != nil {
+                    flecs_type_info_copy(ptr!, base_ptr, 1, UnsafePointer(ti!))
                 }
             }
         }
-        cur = c.pointee.non_fragmenting.next
+        cur = cur!.pointee.non_fragmenting.next
     }
 }
 
-// MARK: - Override Non-Fragmenting
 
 /// Add overrides for non-fragmenting components from a base table.
 private func flecs_instantiate_override_dont_fragment(
@@ -189,10 +196,10 @@ private func flecs_instantiate_override_dont_fragment(
     _ instance: ecs_entity_t)
 {
     let type_count = base_table.pointee.type.count
-    guard let array = base_table.pointee.type.array else { return }
+    if base_table.pointee.type.array == nil { return }
 
     for i in 0..<Int(type_count) {
-        var id = array[i]
+        var id = base_table.pointee.type.array![i]
         if (id & ECS_AUTO_OVERRIDE) == 0 { continue }
         id &= ~ECS_AUTO_OVERRIDE
 
@@ -203,7 +210,6 @@ private func flecs_instantiate_override_dont_fragment(
     }
 }
 
-// MARK: - Main Instantiation Entry Point
 
 /// Recursively instantiate prefab children for an entity.
 public func flecs_instantiate(
@@ -213,8 +219,10 @@ public func flecs_instantiate(
     _ ctx: UnsafePointer<ecs_instantiate_ctx_t>?,
     _ depth: Int32)
 {
-    guard let record = flecs_entities_get_any(world, base) else { return }
-    guard let base_table = record.pointee.table else { return }
+    let record = flecs_entities_get_any(world, base)
+    if record == nil { return }
+    if record!.pointee.table == nil { return }
+    let base_table = record!.pointee.table!
 
     if depth >= FLECS_DAG_DEPTH_MAX {
         // Likely cycle detected during instantiation
@@ -226,7 +234,7 @@ public func flecs_instantiate(
     }
 
     // If base has non-fragmenting components, add to instance
-    if (record.pointee.row & EcsEntityHasDontFragment) != 0 {
+    if (record!.pointee.row & EcsEntityHasDontFragment) != 0 {
         flecs_instantiate_dont_fragment(world, base, instance)
     }
 
@@ -235,25 +243,26 @@ public func flecs_instantiate(
         return
     }
 
-    guard let cr = flecs_components_get(UnsafePointer(world), ecs_childof(base)) else {
+    let cr = flecs_components_get(UnsafePointer(world), ecs_childof(base))
+    if cr == nil {
         return
     }
 
-    if (cr.pointee.flags & EcsIdOrderedChildren) != 0 {
+    if (cr!.pointee.flags & EcsIdOrderedChildren) != 0 {
         // Would use ordered children list or tree spawner for fast instantiation
         // Full implementation requires flecs_prefab_spawner_build and
         // flecs_spawner_instantiate
-        if let pair = cr.pointee.pair {
-            let count = ecs_vec_count(&pair.pointee.ordered_children)
-            if let children = ecs_vec_first(&pair.pointee.ordered_children)?
+        if cr!.pointee.pair != nil {
+            let count = ecs_vec_count(&cr!.pointee.pair!.pointee.ordered_children)
+            let children = ecs_vec_first(&cr!.pointee.pair!.pointee.ordered_children)?
                 .bindMemory(to: ecs_entity_t.self, capacity: Int(count))
-            {
+            if children != nil {
                 for i in 0..<Int(count) {
-                    let child = children[i]
+                    let child = children![i]
                     let range = flecs_range_from_entity(world, child)
-                    guard let table = range.table else { continue }
+                    if range.table == nil { continue }
 
-                    if (table.pointee.flags & EcsTableHasChildOf) == 0 {
+                    if (range.table!.pointee.flags & EcsTableHasChildOf) == 0 {
                         continue
                     }
 
@@ -265,9 +274,14 @@ public func flecs_instantiate(
     } else {
         // Iterate table cache for all children of base
         var it = ecs_table_cache_iter_t()
-        if flecs_table_cache_all_iter(UnsafeMutableRawPointer(cr), &it) {
-            while let tr = flecs_table_cache_next(&it, ecs_table_record_t.self) {
-                guard let table = tr.pointee.hdr.table else { continue }
+        if flecs_table_cache_all_iter(UnsafeMutableRawPointer(cr!), &it) {
+            var tr = flecs_table_cache_next(&it, ecs_table_record_t.self)
+            while tr != nil {
+                if tr!.pointee.hdr.table == nil {
+                    tr = flecs_table_cache_next(&it, ecs_table_record_t.self)
+                    continue
+                }
+                let table = tr!.pointee.hdr.table!
                 let range = ecs_table_range_t(
                     table: table,
                     offset: 0,
@@ -275,12 +289,12 @@ public func flecs_instantiate(
 
                 flecs_instantiate_children(
                     world, base, instance, range, ctx, depth)
+                tr = flecs_table_cache_next(&it, ecs_table_record_t.self)
             }
         }
     }
 }
 
-// MARK: - Children Instantiation
 
 /// Instantiate children from a prefab child table range.
 private func flecs_instantiate_children(
@@ -293,12 +307,15 @@ private func flecs_instantiate_children(
 {
     if child_range.count == 0 { return }
 
-    guard let child_table = child_range.table else { return }
+    if child_range.table == nil { return }
+    let child_table = child_range.table!
     let type = child_table.pointee.type
     let type_count = type.count
 
-    guard let r = flecs_entities_get(UnsafePointer(world), instance) else { return }
-    guard let table = r.pointee.table else { return }
+    let r = flecs_entities_get(UnsafePointer(world), instance)
+    if r == nil { return }
+    if r!.pointee.table == nil { return }
+    let table = r!.pointee.table!
 
     // Build the component array for the instance children's table.
     // Replace ChildOf(base) with ChildOf(instance), skip DontInherit/SlotOf.
@@ -307,16 +324,16 @@ private func flecs_instantiate_children(
     var added_ids = [ecs_id_t]()
     added_ids.reserveCapacity(Int(type_count) + 1)
 
-    guard let ids = type.array else { return }
+    if type.array == nil { return }
     for i in 0..<Int(type_count) {
-        let id = ids[i]
+        let id = type.array![i]
 
         // Skip DontInherit (except Name and ChildOf)
         if id != ecs_pair(ecs_id_EcsIdentifier, EcsName) &&
             ECS_PAIR_FIRST(id) != EcsChildOf
         {
-            if let trs = child_table.pointee._.pointee.records {
-                let cr = trs[i].hdr.cr!
+            if child_table.pointee._.pointee.records != nil {
+                let cr = child_table.pointee._.pointee.records![i].hdr.cr!
                 if (cr.pointee.flags & EcsIdOnInstantiateDontInherit) != 0 {
                     continue
                 }
@@ -348,7 +365,7 @@ private func flecs_instantiate_children(
         added_ids.append(id)
     }
 
-    guard childof_base_index != -1 else { return }
+    if childof_base_index == -1 { return }
 
     // If children are added to a prefab, make them prefabs too
     if (table.pointee.flags & EcsTableIsPrefab) != 0 {
@@ -363,11 +380,12 @@ private func flecs_instantiate_children(
 
     // Create stable instance child ids
     var ctx_cur = ecs_instantiate_ctx_t(root_prefab: base, root_instance: instance)
-    if let ctx = ctx {
-        ctx_cur = ctx.pointee
+    if ctx != nil {
+        ctx_cur = ctx!.pointee
     }
 
-    guard let children = child_table.pointee.data.entities else { return }
+    if child_table.pointee.data.entities == nil { return }
+    let children = child_table.pointee.data.entities!
 
     var child_ids = [ecs_entity_t]()
     child_ids.reserveCapacity(Int(child_range.count))

@@ -1,9 +1,14 @@
 // Id.swift - 1:1 translation of flecs id.c
 // Id utilities: matching, validation, pair operations, string conversion
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Id Matching
 
 public func ecs_id_match(
     _ id: ecs_id_t,
@@ -67,7 +72,6 @@ public func ecs_id_match(
     return false
 }
 
-// MARK: - Id Type Checks
 
 public func ecs_id_is_pair(
     _ id: ecs_id_t) -> Bool
@@ -113,7 +117,6 @@ public func ecs_id_is_any(
     return first == EcsAny || second == EcsAny
 }
 
-// MARK: - Id Validation
 
 public func flecs_id_invalid_reason(
     _ world: UnsafePointer<ecs_world_t>,
@@ -172,7 +175,6 @@ public func ecs_id_is_valid(
     return flecs_id_invalid_reason(world, id) == nil
 }
 
-// MARK: - Pair Construction
 
 public func ecs_make_pair(
     _ relationship: ecs_entity_t,
@@ -181,7 +183,6 @@ public func ecs_make_pair(
     return ecs_pair(relationship, target)
 }
 
-// MARK: - Id Flag String
 
 public func ecs_id_flag_str(
     _ entity: UInt64) -> UnsafePointer<CChar>

@@ -1,9 +1,14 @@
 // Doc.swift - 1:1 translation of flecs addons/doc.c
 // Documentation description component management
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Doc Description Type
 
 /// Entity documentation description (stores a string value).
 public struct EcsDocDescription {
@@ -11,7 +16,6 @@ public struct EcsDocDescription {
     public init() { self.value = nil }
 }
 
-// MARK: - Doc Setters
 
 /// Set the UUID documentation for an entity.
 public func ecs_doc_set_uuid(
@@ -83,17 +87,17 @@ private func flecs_doc_set(
     }
 }
 
-// MARK: - Doc Getters
 
 /// Get the UUID documentation for an entity.
 public func ecs_doc_get_uuid(
     _ world: UnsafePointer<ecs_world_t>,
     _ entity: ecs_entity_t) -> UnsafePointer<CChar>?
 {
-    guard let ptr = ecs_get_pair(world, entity, EcsDocDescription.self, EcsDocUuid) else {
+    let ptr = ecs_get_pair(world, entity, EcsDocDescription.self, EcsDocUuid)
+    if ptr == nil {
         return nil
     }
-    return ptr.pointee.value
+    return ptr!.pointee.value
 }
 
 /// Get the display name for an entity (falls back to entity name).
@@ -101,8 +105,9 @@ public func ecs_doc_get_name(
     _ world: UnsafePointer<ecs_world_t>,
     _ entity: ecs_entity_t) -> UnsafePointer<CChar>?
 {
-    if let ptr = ecs_get_pair(world, entity, EcsDocDescription.self, EcsName) {
-        return ptr.pointee.value
+    let ptr = ecs_get_pair(world, entity, EcsDocDescription.self, EcsName)
+    if ptr != nil {
+        return ptr!.pointee.value
     }
     return ecs_get_name(world, entity)
 }
@@ -112,10 +117,11 @@ public func ecs_doc_get_brief(
     _ world: UnsafePointer<ecs_world_t>,
     _ entity: ecs_entity_t) -> UnsafePointer<CChar>?
 {
-    guard let ptr = ecs_get_pair(world, entity, EcsDocDescription.self, EcsDocBrief) else {
+    let ptr = ecs_get_pair(world, entity, EcsDocDescription.self, EcsDocBrief)
+    if ptr == nil {
         return nil
     }
-    return ptr.pointee.value
+    return ptr!.pointee.value
 }
 
 /// Get the detailed description for an entity.
@@ -123,10 +129,11 @@ public func ecs_doc_get_detail(
     _ world: UnsafePointer<ecs_world_t>,
     _ entity: ecs_entity_t) -> UnsafePointer<CChar>?
 {
-    guard let ptr = ecs_get_pair(world, entity, EcsDocDescription.self, EcsDocDetail) else {
+    let ptr = ecs_get_pair(world, entity, EcsDocDescription.self, EcsDocDetail)
+    if ptr == nil {
         return nil
     }
-    return ptr.pointee.value
+    return ptr!.pointee.value
 }
 
 /// Get the link for an entity.
@@ -134,10 +141,11 @@ public func ecs_doc_get_link(
     _ world: UnsafePointer<ecs_world_t>,
     _ entity: ecs_entity_t) -> UnsafePointer<CChar>?
 {
-    guard let ptr = ecs_get_pair(world, entity, EcsDocDescription.self, EcsDocLink) else {
+    let ptr = ecs_get_pair(world, entity, EcsDocDescription.self, EcsDocLink)
+    if ptr == nil {
         return nil
     }
-    return ptr.pointee.value
+    return ptr!.pointee.value
 }
 
 /// Get the color for an entity.
@@ -145,13 +153,13 @@ public func ecs_doc_get_color(
     _ world: UnsafePointer<ecs_world_t>,
     _ entity: ecs_entity_t) -> UnsafePointer<CChar>?
 {
-    guard let ptr = ecs_get_pair(world, entity, EcsDocDescription.self, EcsDocColor) else {
+    let ptr = ecs_get_pair(world, entity, EcsDocDescription.self, EcsDocColor)
+    if ptr == nil {
         return nil
     }
-    return ptr.pointee.value
+    return ptr!.pointee.value
 }
 
-// MARK: - Module Import
 
 /// Import the Doc module, registering the EcsDocDescription component.
 public func FlecsDocImport(

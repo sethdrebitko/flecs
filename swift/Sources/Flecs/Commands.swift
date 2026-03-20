@@ -2,9 +2,14 @@
 /// Translation of commands.h/commands.c from flecs.
 /// Command queue implementation for deferred operations.
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Command Kind Enum
 
 /// Types for deferred operations.
 public enum ecs_cmd_kind_t: Int32 {
@@ -29,7 +34,6 @@ public enum ecs_cmd_kind_t: Int32 {
     case EcsCmdSkip
 }
 
-// MARK: - Command Structs
 
 /// Entity-specific metadata for a command in the queue.
 public struct ecs_cmd_entry_t {
@@ -82,7 +86,6 @@ public typealias ecs_on_commands_action_t = @convention(c) (
     UnsafeMutableRawPointer?
 ) -> Void
 
-// MARK: - Size constants for typed vec/sparse operations
 
 @inline(__always)
 internal var ecsCmdSize: ecs_size_t {
@@ -94,7 +97,6 @@ internal var ecsCmdEntrySize: ecs_size_t {
     return ecs_size_t(MemoryLayout<ecs_cmd_entry_t>.stride)
 }
 
-// MARK: - Command Queue Init/Fini
 
 /// Initialize command queue data structure for a stage.
 public func flecs_commands_init(
@@ -124,20 +126,20 @@ public func flecs_commands_fini(
     flecs_sparse_fini(&cmd.pointee.entries)
 }
 
-// MARK: - Command Creation
 
 /// Create a new command in the queue.
 public func flecs_cmd_new(
     _ stage: UnsafeMutablePointer<ecs_stage_t>) -> UnsafeMutablePointer<ecs_cmd_t>?
 {
-    guard let raw = ecs_vec_append(
+    let raw = ecs_vec_append(
         &stage.pointee.allocator,
         &stage.pointee.cmd.pointee.queue,
-        ecsCmdSize) else {
+        ecsCmdSize)
+    if raw == nil {
         return nil
     }
 
-    let cmd = raw.bindMemory(to: ecs_cmd_t.self, capacity: 1)
+    let cmd = raw!.bindMemory(to: ecs_cmd_t.self, capacity: 1)
     cmd.pointee.is._1.value = nil
     cmd.pointee.id = 0
     cmd.pointee.next_for_entity = 0
@@ -159,30 +161,32 @@ public func flecs_cmd_new_batched(
         ecsCmdEntrySize,
         e)
     var entry: UnsafeMutablePointer<ecs_cmd_entry_t>? = nil
-    if let entryRaw = entryRaw {
-        entry = entryRaw.bindMemory(to: ecs_cmd_entry_t.self, capacity: 1)
+    if entryRaw != nil {
+        entry = entryRaw!.bindMemory(to: ecs_cmd_entry_t.self, capacity: 1)
     }
 
     let cur = ecs_vec_count(cmds)
-    guard let cmd = flecs_cmd_new(stage) else { return nil }
+    let cmd = flecs_cmd_new(stage)
+    if cmd == nil { return nil }
     var is_new = false
 
-    if let entry = entry {
-        if entry.pointee.first == -1 {
+    if entry != nil {
+        if entry!.pointee.first == -1 {
             // Existing but invalidated entry
-            entry.pointee.first = cur
-            cmd.pointee.entry = entry
+            entry!.pointee.first = cur
+            cmd!.pointee.entry = entry!
         } else {
-            let last = entry.pointee.last
-            guard let arrRaw = ecs_vec_first(cmds) else {
+            let last = entry!.pointee.last
+            let arrRaw = ecs_vec_first(cmds)
+            if arrRaw == nil {
                 return cmd
             }
-            let arr = arrRaw.bindMemory(to: ecs_cmd_t.self,
+            let arr = arrRaw!.bindMemory(to: ecs_cmd_t.self,
                                         capacity: Int(ecs_vec_count(cmds)))
             if arr[Int(last)].entity == e {
                 let last_op = &arr[Int(last)]
                 last_op.pointee.next_for_entity = cur
-                if last == entry.pointee.first {
+                if last == entry!.pointee.first {
                     // Flip sign bit so flush logic can tell which command
                     // is the first for an entity
                     last_op.pointee.next_for_entity *= -1
@@ -198,13 +202,14 @@ public func flecs_cmd_new_batched(
     }
 
     if is_new {
-        guard let newEntryRaw = flecs_sparse_ensure_fast(
+        let newEntryRaw = flecs_sparse_ensure_fast(
             &stage.pointee.cmd.pointee.entries,
             ecsCmdEntrySize,
-            e) else {
+            e)
+        if newEntryRaw == nil {
             return cmd
         }
-        let newEntry = newEntryRaw.bindMemory(to: ecs_cmd_entry_t.self, capacity: 1)
+        let newEntry = newEntryRaw!.bindMemory(to: ecs_cmd_entry_t.self, capacity: 1)
         newEntry.pointee.first = cur
         cmd.pointee.entry = newEntry
         entry = newEntry
@@ -215,7 +220,6 @@ public func flecs_cmd_new_batched(
     return cmd
 }
 
-// MARK: - Defer Begin/End
 
 /// Begin deferred mode. Returns true if this call transitioned from non-deferred to deferred.
 public func flecs_defer_begin(
@@ -276,30 +280,31 @@ public func flecs_defer_end(
 
         // TODO: Full command execution requires entity operations subsystem.
         // For now, discard all commands and clean up resources.
-        if count > 0, let cmdsRaw = ecs_vec_first(queue) {
-            let cmds = cmdsRaw.bindMemory(to: ecs_cmd_t.self, capacity: Int(count))
+        let cmdsRaw = ecs_vec_first(queue)
+        if count > 0 && cmdsRaw != nil {
+            let cmds = cmdsRaw!.bindMemory(to: ecs_cmd_t.self, capacity: Int(count))
             for i in 0..<Int(count) {
                 let cmd = &cmds[i]
 
                 // Invalidate entry
-                if let entry = cmd.pointee.entry {
-                    entry.pointee.first = -1
+                if cmd.pointee.entry != nil {
+                    cmd.pointee.entry!.pointee.first = -1
                 }
 
                 // Free command resources
                 let kind = cmd.pointee.kind
                 if kind == .EcsCmdBulkNew {
-                    if let entities = cmd.pointee.is._n.entities {
-                        free(entities)
+                    if cmd.pointee.is._n.entities != nil {
+                        free(cmd.pointee.is._n.entities!)
                     }
                 } else if kind == .EcsCmdPath {
-                    if let value = cmd.pointee.is._1.value {
-                        free(value)
+                    if cmd.pointee.is._1.value != nil {
+                        free(cmd.pointee.is._1.value!)
                         cmd.pointee.is._1.value = nil
                     }
                 } else {
-                    if let value = cmd.pointee.is._1.value {
-                        flecs_stack_free(value, cmd.pointee.is._1.size)
+                    if cmd.pointee.is._1.value != nil {
+                        flecs_stack_free(cmd.pointee.is._1.value!, cmd.pointee.is._1.size)
                     }
                 }
             }
@@ -316,7 +321,6 @@ public func flecs_defer_end(
     return false
 }
 
-// MARK: - Defer Purge
 
 /// Discard commands from queue without executing them.
 public func flecs_defer_purge(
@@ -329,8 +333,9 @@ public func flecs_defer_purge(
         let count = ecs_vec_count(commands)
 
         if count > 0 {
-            if let cmdsRaw = ecs_vec_first(commands) {
-                let cmds = cmdsRaw.bindMemory(to: ecs_cmd_t.self, capacity: Int(count))
+            let cmdsRaw = ecs_vec_first(commands)
+            if cmdsRaw != nil {
+                let cmds = cmdsRaw!.bindMemory(to: ecs_cmd_t.self, capacity: Int(count))
                 for i in 0..<Int(count) {
                     flecs_discard_cmd(world, &cmds[i])
                 }
@@ -348,7 +353,6 @@ public func flecs_defer_purge(
     return false
 }
 
-// MARK: - Discard Command
 
 /// Discard a single command, freeing its resources without executing it.
 public func flecs_discard_cmd(
@@ -357,25 +361,24 @@ public func flecs_discard_cmd(
 {
     let kind = cmd.pointee.kind
     if kind == .EcsCmdBulkNew {
-        if let entities = cmd.pointee.is._n.entities {
-            free(entities)
+        if cmd.pointee.is._n.entities != nil {
+            free(cmd.pointee.is._n.entities!)
         }
     } else if kind == .EcsCmdEvent {
         // Event commands store an event descriptor in value; free associated data.
         // Full cleanup would call flecs_free_cmd_event but that requires
         // type info lookups. For now free the stack allocation.
-        if let value = cmd.pointee.is._1.value {
-            flecs_stack_free(value, cmd.pointee.is._1.size)
+        if cmd.pointee.is._1.value != nil {
+            flecs_stack_free(cmd.pointee.is._1.value!, cmd.pointee.is._1.size)
         }
     } else {
-        if let value = cmd.pointee.is._1.value {
+        if cmd.pointee.is._1.value != nil {
             // TODO: Call type destructor via flecs_dtor_value when type info is available.
-            flecs_stack_free(value, cmd.pointee.is._1.size)
+            flecs_stack_free(cmd.pointee.is._1.value!, cmd.pointee.is._1.size)
         }
     }
 }
 
-// MARK: - Simple Defer Commands
 
 /// Insert modified command.
 public func flecs_defer_modified(
@@ -384,10 +387,11 @@ public func flecs_defer_modified(
     _ id: ecs_id_t) -> Bool
 {
     if flecs_defer_cmd(stage) {
-        if let cmd = flecs_cmd_new(stage) {
-            cmd.pointee.kind = .EcsCmdModified
-            cmd.pointee.id = id
-            cmd.pointee.entity = entity
+        let cmd = flecs_cmd_new(stage)
+        if cmd != nil {
+            cmd!.pointee.kind = .EcsCmdModified
+            cmd!.pointee.id = id
+            cmd!.pointee.entity = entity
         }
         return true
     }
@@ -402,11 +406,12 @@ public func flecs_defer_clone(
     _ clone_value: Bool) -> Bool
 {
     if flecs_defer_cmd(stage) {
-        if let cmd = flecs_cmd_new(stage) {
-            cmd.pointee.kind = .EcsCmdClone
-            cmd.pointee.id = src
-            cmd.pointee.entity = entity
-            cmd.pointee.is._1.clone_value = clone_value
+        let cmd = flecs_cmd_new(stage)
+        if cmd != nil {
+            cmd!.pointee.kind = .EcsCmdClone
+            cmd!.pointee.id = src
+            cmd!.pointee.entity = entity
+            cmd!.pointee.is._1.clone_value = clone_value
         }
         return true
     }
@@ -421,15 +426,16 @@ public func flecs_defer_path(
     _ name: UnsafePointer<CChar>?) -> Bool
 {
     if stage.pointee.defer > 0 {
-        if let cmd = flecs_cmd_new(stage) {
-            cmd.pointee.kind = .EcsCmdPath
-            cmd.pointee.entity = entity
-            cmd.pointee.id = parent
+        let cmd = flecs_cmd_new(stage)
+        if cmd != nil {
+            cmd!.pointee.kind = .EcsCmdPath
+            cmd!.pointee.entity = entity
+            cmd!.pointee.id = parent
             // Duplicate the name string
-            if let name = name {
-                cmd.pointee.is._1.value = UnsafeMutableRawPointer(strdup(name))
+            if name != nil {
+                cmd!.pointee.is._1.value = UnsafeMutableRawPointer(strdup(name!))
             } else {
-                cmd.pointee.is._1.value = nil
+                cmd!.pointee.is._1.value = nil
             }
         }
         return true
@@ -443,9 +449,10 @@ public func flecs_defer_delete(
     _ entity: ecs_entity_t) -> Bool
 {
     if flecs_defer_cmd(stage) {
-        if let cmd = flecs_cmd_new(stage) {
-            cmd.pointee.kind = .EcsCmdDelete
-            cmd.pointee.entity = entity
+        let cmd = flecs_cmd_new(stage)
+        if cmd != nil {
+            cmd!.pointee.kind = .EcsCmdDelete
+            cmd!.pointee.entity = entity
         }
         return true
     }
@@ -458,9 +465,10 @@ public func flecs_defer_clear(
     _ entity: ecs_entity_t) -> Bool
 {
     if flecs_defer_cmd(stage) {
-        if let cmd = flecs_cmd_new_batched(stage, entity) {
-            cmd.pointee.kind = .EcsCmdClear
-            cmd.pointee.entity = entity
+        let cmd = flecs_cmd_new_batched(stage, entity)
+        if cmd != nil {
+            cmd!.pointee.kind = .EcsCmdClear
+            cmd!.pointee.entity = entity
         }
         return true
     }
@@ -474,10 +482,11 @@ public func flecs_defer_on_delete_action(
     _ action: ecs_entity_t) -> Bool
 {
     if flecs_defer_cmd(stage) {
-        if let cmd = flecs_cmd_new(stage) {
-            cmd.pointee.kind = .EcsCmdOnDeleteAction
-            cmd.pointee.id = id
-            cmd.pointee.entity = action
+        let cmd = flecs_cmd_new(stage)
+        if cmd != nil {
+            cmd!.pointee.kind = .EcsCmdOnDeleteAction
+            cmd!.pointee.id = id
+            cmd!.pointee.entity = action
         }
         return true
     }
@@ -492,10 +501,11 @@ public func flecs_defer_enable(
     _ enable: Bool) -> Bool
 {
     if flecs_defer_cmd(stage) {
-        if let cmd = flecs_cmd_new(stage) {
-            cmd.pointee.kind = enable ? .EcsCmdEnable : .EcsCmdDisable
-            cmd.pointee.entity = entity
-            cmd.pointee.id = id
+        let cmd = flecs_cmd_new(stage)
+        if cmd != nil {
+            cmd!.pointee.kind = enable ? .EcsCmdEnable : .EcsCmdDisable
+            cmd!.pointee.entity = entity
+            cmd!.pointee.id = id
         }
         return true
     }
@@ -511,20 +521,17 @@ public func flecs_defer_bulk_new(
     _ ids_out: UnsafeMutablePointer<UnsafePointer<ecs_entity_t>?>) -> Bool
 {
     if flecs_defer_cmd(stage) {
-        let ids = UnsafeMutablePointer<ecs_entity_t>.allocate(capacity: Int(count))
-
-        // TODO: Use ecs_new (thread safe) to generate entity IDs.
-        // For now, zero-initialize as placeholder.
-        ids.initialize(repeating: 0, count: Int(count))
+        let ids = ecs_os_calloc_n(ecs_entity_t.self, count)!
 
         ids_out.pointee = UnsafePointer(ids)
 
-        if let cmd = flecs_cmd_new(stage) {
-            cmd.pointee.kind = .EcsCmdBulkNew
-            cmd.pointee.id = id
-            cmd.pointee.is._n.entities = ids
-            cmd.pointee.is._n.count = count
-            cmd.pointee.entity = 0
+        let cmd = flecs_cmd_new(stage)
+        if cmd != nil {
+            cmd!.pointee.kind = .EcsCmdBulkNew
+            cmd!.pointee.id = id
+            cmd!.pointee.is._n.entities = ids
+            cmd!.pointee.is._n.count = count
+            cmd!.pointee.entity = 0
         }
         return true
     }
@@ -539,10 +546,11 @@ public func flecs_defer_add(
 {
     if flecs_defer_cmd(stage) {
         assert(id != 0, "id must not be 0")
-        if let cmd = flecs_cmd_new_batched(stage, entity) {
-            cmd.pointee.kind = .EcsCmdAdd
-            cmd.pointee.id = id
-            cmd.pointee.entity = entity
+        let cmd = flecs_cmd_new_batched(stage, entity)
+        if cmd != nil {
+            cmd!.pointee.kind = .EcsCmdAdd
+            cmd!.pointee.id = id
+            cmd!.pointee.entity = entity
         }
         return true
     }
@@ -557,10 +565,11 @@ public func flecs_defer_remove(
 {
     if flecs_defer_cmd(stage) {
         assert(id != 0, "id must not be 0")
-        if let cmd = flecs_cmd_new_batched(stage, entity) {
-            cmd.pointee.kind = .EcsCmdRemove
-            cmd.pointee.id = id
-            cmd.pointee.entity = entity
+        let cmd = flecs_cmd_new_batched(stage, entity)
+        if cmd != nil {
+            cmd!.pointee.kind = .EcsCmdRemove
+            cmd!.pointee.id = id
+            cmd!.pointee.entity = entity
         }
         // Note: The C version also restores overridden component values here.
         // That requires table/record access which depends on other subsystems.
@@ -570,7 +579,6 @@ public func flecs_defer_remove(
     return false
 }
 
-// MARK: - Set/Ensure/Emplace Commands (Stubs)
 
 /// Insert set component command.
 /// Stub: allocates stack space for the value but does not look up existing components.
@@ -586,23 +594,25 @@ public func flecs_defer_set(
     assert(value != nil, "value must not be nil")
     assert(size != 0, "size must not be 0")
 
-    guard let cmd = flecs_cmd_new_batched(stage, entity) else { return nil }
-    cmd.pointee.entity = entity
-    cmd.pointee.id = id
+    let cmd = flecs_cmd_new_batched(stage, entity)
+    if cmd == nil { return nil }
+    cmd!.pointee.entity = entity
+    cmd!.pointee.id = id
 
     // Allocate temporary storage on the command stack
     let stack = &stage.pointee.cmd.pointee.stack
     let alignment = size < 16 ? size : 16
-    guard let cmd_value = flecs_stack_alloc(stack, size, alignment) else { return nil }
+    let cmd_value = flecs_stack_alloc(stack, size, alignment)
+    if cmd_value == nil { return nil }
 
-    cmd.pointee.kind = .EcsCmdSet
-    cmd.pointee.is._1.size = size
-    cmd.pointee.is._1.value = cmd_value
+    cmd!.pointee.kind = .EcsCmdSet
+    cmd!.pointee.is._1.size = size
+    cmd!.pointee.is._1.value = cmd_value!
 
     // Copy value into command storage
-    memcpy(cmd_value, value, Int(size))
+    memcpy(cmd_value!, value, Int(size))
 
-    return cmd_value
+    return cmd_value!
 }
 
 /// Insert ensure component command.
@@ -617,22 +627,24 @@ public func flecs_defer_ensure(
 {
     assert(size != 0, "size must not be 0")
 
-    guard let cmd = flecs_cmd_new_batched(stage, entity) else { return nil }
-    cmd.pointee.entity = entity
-    cmd.pointee.id = id
+    let cmd = flecs_cmd_new_batched(stage, entity)
+    if cmd == nil { return nil }
+    cmd!.pointee.entity = entity
+    cmd!.pointee.id = id
 
     let stack = &stage.pointee.cmd.pointee.stack
     let alignment = size < 16 ? size : 16
-    guard let ptr = flecs_stack_alloc(stack, size, alignment) else { return nil }
+    let ptr = flecs_stack_alloc(stack, size, alignment)
+    if ptr == nil { return nil }
 
-    cmd.pointee.kind = .EcsCmdEnsure
-    cmd.pointee.is._1.size = size
-    cmd.pointee.is._1.value = ptr
+    cmd!.pointee.kind = .EcsCmdEnsure
+    cmd!.pointee.is._1.size = size
+    cmd!.pointee.is._1.value = ptr!
 
     // Zero-initialize (ctor substitute)
-    memset(ptr, 0, Int(size))
+    memset(ptr!, 0, Int(size))
 
-    return ptr
+    return ptr!
 }
 
 /// Insert emplace component command.
@@ -646,23 +658,24 @@ public func flecs_defer_emplace(
     _ size: ecs_size_t,
     _ is_new: UnsafeMutablePointer<Bool>?) -> UnsafeMutableRawPointer?
 {
-    guard let cmd = flecs_cmd_new_batched(stage, entity) else { return nil }
-    cmd.pointee.entity = entity
-    cmd.pointee.id = id
+    let cmd = flecs_cmd_new_batched(stage, entity)
+    if cmd == nil { return nil }
+    cmd!.pointee.entity = entity
+    cmd!.pointee.id = id
 
     let stack = &stage.pointee.cmd.pointee.stack
     let alignment = size < 16 ? size : 16
-    guard let cmd_value = flecs_stack_alloc(stack, size, alignment) else { return nil }
+    let cmd_value = flecs_stack_alloc(stack, size, alignment)
+    if cmd_value == nil { return nil }
 
-    cmd.pointee.kind = .EcsCmdEmplace
-    cmd.pointee.is._1.size = size
-    cmd.pointee.is._1.value = cmd_value
+    cmd!.pointee.kind = .EcsCmdEmplace
+    cmd!.pointee.is._1.size = size
+    cmd!.pointee.is._1.value = cmd_value!
     is_new?.pointee = true
 
-    return cmd_value
+    return cmd_value!
 }
 
-// MARK: - Enqueue Event
 
 /// Insert event command.
 /// Stub: copies the event descriptor to the command stack.
@@ -672,32 +685,37 @@ public func flecs_enqueue(
     _ stage: UnsafeMutablePointer<ecs_stage_t>,
     _ desc: UnsafeMutablePointer<ecs_event_desc_t>)
 {
-    guard let cmd = flecs_cmd_new(stage) else { return }
-    cmd.pointee.kind = .EcsCmdEvent
-    cmd.pointee.entity = desc.pointee.entity
+    let cmd = flecs_cmd_new(stage)
+    if cmd == nil { return }
+    cmd!.pointee.kind = .EcsCmdEvent
+    cmd!.pointee.entity = desc.pointee.entity
 
     let stack = &stage.pointee.cmd.pointee.stack
     let descSize = ecs_size_t(MemoryLayout<ecs_event_desc_t>.stride)
     let descAlign = ecs_size_t(MemoryLayout<ecs_event_desc_t>.alignment)
-    guard let descCmdRaw = flecs_stack_alloc(stack, descSize, descAlign) else { return }
-    let descCmd = descCmdRaw.bindMemory(to: ecs_event_desc_t.self, capacity: 1)
+    let descCmdRaw = flecs_stack_alloc(stack, descSize, descAlign)
+    if descCmdRaw == nil { return }
+    let descCmd = descCmdRaw!.bindMemory(to: ecs_event_desc_t.self, capacity: 1)
     descCmd.pointee = desc.pointee
 
-    if let ids = desc.pointee.ids, ids.pointee.count != 0 {
+    if desc.pointee.ids != nil && desc.pointee.ids!.pointee.count != 0 {
+        let ids = desc.pointee.ids!
         let typeSize = ecs_size_t(MemoryLayout<ecs_type_t>.stride)
         let typeAlign = ecs_size_t(MemoryLayout<ecs_type_t>.alignment)
-        guard let typeCmdRaw = flecs_stack_alloc(stack, typeSize, typeAlign) else { return }
-        let typeCmd = typeCmdRaw.bindMemory(to: ecs_type_t.self, capacity: 1)
+        let typeCmdRaw = flecs_stack_alloc(stack, typeSize, typeAlign)
+        if typeCmdRaw == nil { return }
+        let typeCmd = typeCmdRaw!.bindMemory(to: ecs_type_t.self, capacity: 1)
 
         let id_count = ids.pointee.count
         typeCmd.pointee.count = id_count
 
         let idArraySize = ecs_size_t(MemoryLayout<ecs_id_t>.stride) * id_count
         let idArrayAlign = ecs_size_t(MemoryLayout<ecs_id_t>.alignment)
-        guard let idArrayRaw = flecs_stack_alloc(stack, idArraySize, idArrayAlign) else { return }
-        let idArray = idArrayRaw.bindMemory(to: ecs_id_t.self, capacity: Int(id_count))
-        if let srcArray = ids.pointee.array {
-            memcpy(idArray, srcArray, Int(MemoryLayout<ecs_id_t>.stride) * Int(id_count))
+        let idArrayRaw = flecs_stack_alloc(stack, idArraySize, idArrayAlign)
+        if idArrayRaw == nil { return }
+        let idArray = idArrayRaw!.bindMemory(to: ecs_id_t.self, capacity: Int(id_count))
+        if ids.pointee.array != nil {
+            memcpy(idArray, ids.pointee.array!, Int(MemoryLayout<ecs_id_t>.stride) * Int(id_count))
         }
         typeCmd.pointee.array = idArray
 
@@ -706,14 +724,13 @@ public func flecs_enqueue(
         descCmd.pointee.ids = nil
     }
 
-    cmd.pointee.is._1.value = descCmdRaw
-    cmd.pointee.is._1.size = descSize
+    cmd!.pointee.is._1.value = descCmdRaw!
+    cmd!.pointee.is._1.size = descSize
 
     // TODO: Handle param/const_param copying when type info subsystem is available.
     // The C version uses type info to do move_ctor/copy_ctor on the event param.
 }
 
-// MARK: - Public API Wrappers
 
 /// Begin deferred mode (public API).
 public func ecs_defer_begin(
@@ -755,7 +772,6 @@ public func ecs_defer_resume(
     stage.pointee.defer = -stage.pointee.defer
 }
 
-// MARK: - Command Flush
 
 /// Flush a batch of commands for a single entity.
 /// Computes the final table from accumulated add/remove operations,
@@ -767,8 +783,10 @@ private func flecs_cmd_batch_for_entity(
     _ cmds: UnsafeMutablePointer<ecs_cmd_t>,
     _ start: Int32)
 {
-    guard let r = flecs_entities_get(UnsafePointer(world), entity) else { return }
-    guard var table = r.pointee.table else { return }
+    let r = flecs_entities_get(UnsafePointer(world), entity)
+    if r == nil { return }
+    if r!.pointee.table == nil { return }
+    var table = r!.pointee.table!
 
     world.pointee.info.cmd.batched_entity_count += 1
 
@@ -785,8 +803,9 @@ private func flecs_cmd_batch_for_entity(
 
         // Validate id
         if id != 0 {
-            if let cr = flecs_components_get(UnsafePointer(world), id) {
-                if (cr.pointee.flags & EcsIdDontFragment) != 0 {
+            let cr = flecs_components_get(UnsafePointer(world), id)
+            if cr != nil {
+                if (cr!.pointee.flags & EcsIdDontFragment) != 0 {
                     if cmd.pointee.kind == .EcsCmdSet {
                         cmd.pointee.kind = .EcsCmdSetDontFragment
                     }
@@ -798,28 +817,32 @@ private func flecs_cmd_batch_for_entity(
         switch cmd.pointee.kind {
         case .EcsCmdAddModified:
             cmd.pointee.kind = .EcsCmdModified
-            if let t = flecs_find_table_add(world, table, id, diff) {
-                table = t
+            let t1 = flecs_find_table_add(world, table, id, diff)
+            if t1 != nil {
+                table = t1!
             }
             world.pointee.info.cmd.batched_command_count += 1
 
         case .EcsCmdAdd:
-            if let t = flecs_find_table_add(world, table, id, diff) {
-                table = t
+            let t2 = flecs_find_table_add(world, table, id, diff)
+            if t2 != nil {
+                table = t2!
             }
             world.pointee.info.cmd.batched_command_count += 1
             cmd.pointee.kind = .EcsCmdSkip
 
         case .EcsCmdSet, .EcsCmdEnsure:
-            if let t = flecs_find_table_add(world, table, id, diff) {
-                table = t
+            let t3 = flecs_find_table_add(world, table, id, diff)
+            if t3 != nil {
+                table = t3!
             }
             world.pointee.info.cmd.batched_command_count += 1
             has_set = true
 
         case .EcsCmdRemove:
-            if let t = flecs_find_table_remove(world, table, id, diff) {
-                table = t
+            let t4 = flecs_find_table_remove(world, table, id, diff)
+            if t4 != nil {
+                table = t4!
             }
             world.pointee.info.cmd.batched_command_count += 1
             cmd.pointee.kind = .EcsCmdSkip
@@ -841,7 +864,7 @@ private func flecs_cmd_batch_for_entity(
     var table_diff = ecs_table_diff_t()
     flecs_table_diff_build_noalloc(diff, &table_diff)
     flecs_defer_begin(world, world.pointee.stages![0]!)
-    flecs_commit(world, entity, r, table, &table_diff, true, 0)
+    flecs_commit(world, entity, r!, table, &table_diff, true, 0)
     flecs_defer_end(world, world.pointee.stages![0]!)
 
     // Phase 3: Copy set values to final component storage
@@ -853,11 +876,11 @@ private func flecs_cmd_batch_for_entity(
             if next_for_entity < 0 { next_for_entity *= -1 }
 
             if cmd.pointee.kind == .EcsCmdSet || cmd.pointee.kind == .EcsCmdEnsure {
-                if let value = cmd.pointee.is._1.value {
-                    let dst = flecs_get_mut(world, entity, cmd.pointee.id, r,
+                if cmd.pointee.is._1.value != nil {
+                    let dst = flecs_get_mut(world, entity, cmd.pointee.id, r!,
                         cmd.pointee.is._1.size)
-                    if let dst_ptr = dst.ptr, let ti = dst.ti {
-                        flecs_type_info_copy(dst_ptr, value, 1, UnsafePointer(ti))
+                    if dst.ptr != nil && dst.ti != nil {
+                        flecs_type_info_copy(dst.ptr!, cmd.pointee.is._1.value!, 1, UnsafePointer(dst.ti!))
                     }
                 }
             }
@@ -890,12 +913,12 @@ private func flecs_cmd_execute(
         ecs_clone(world, entity, id, cmd.pointee.is._1.clone_value)
     case .EcsCmdSet, .EcsCmdSetDontFragment:
         // Set value on entity
-        if let value = cmd.pointee.is._1.value {
+        if cmd.pointee.is._1.value != nil {
             // Would call ecs_set_id with the value
         }
     case .EcsCmdEnsure:
         // Ensure + copy value
-        if let value = cmd.pointee.is._1.value {
+        if cmd.pointee.is._1.value != nil {
             // Would call ecs_ensure_id + copy
         }
     case .EcsCmdEmplace:
@@ -913,17 +936,17 @@ private func flecs_cmd_execute(
     case .EcsCmdBulkNew:
         flecs_flush_bulk_new(world, cmd)
     case .EcsCmdPath:
-        if let name = cmd.pointee.is._1.value?.assumingMemoryBound(
-            to: CChar.self)
-        {
+        if cmd.pointee.is._1.value != nil {
+            let name = cmd.pointee.is._1.value!.assumingMemoryBound(
+                to: CChar.self)
             ecs_add_fullpath(world, entity, name)
             ecs_os_free(cmd.pointee.is._1.value)
             cmd.pointee.is._1.value = nil
         }
     case .EcsCmdEvent:
-        if let desc = cmd.pointee.is._1.value?.bindMemory(
-            to: ecs_event_desc_t.self, capacity: 1)
-        {
+        if cmd.pointee.is._1.value != nil {
+            let desc = cmd.pointee.is._1.value!.bindMemory(
+                to: ecs_event_desc_t.self, capacity: 1)
             flecs_emit(world, world, desc)
         }
     case .EcsCmdSkip, .EcsCmdAddModified:
@@ -936,7 +959,8 @@ private func flecs_flush_bulk_new(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ cmd: UnsafeMutablePointer<ecs_cmd_t>)
 {
-    guard let entities = cmd.pointee.is._n.entities else { return }
+    if cmd.pointee.is._n.entities == nil { return }
+    let entities = cmd.pointee.is._n.entities!
 
     if cmd.pointee.id != 0 {
         for i in 0..<Int(cmd.pointee.is._n.count) {
@@ -962,10 +986,10 @@ private func flecs_remove_invalid(
         }
         let tgt = ECS_PAIR_SECOND(id)
         if !flecs_entities_is_valid(world, tgt) {
-            if let cr = flecs_components_get(
+            let cr = flecs_components_get(
                 UnsafePointer(world), ecs_pair(rel, EcsWildcard))
-            {
-                let action = ECS_ID_ON_DELETE_TARGET(cr.pointee.flags)
+            if cr != nil {
+                let action = ECS_ID_ON_DELETE_TARGET(cr!.pointee.flags)
                 if action == EcsDelete { return false }
             }
             id_out.pointee = 0

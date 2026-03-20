@@ -1,9 +1,14 @@
 // App.swift - 1:1 translation of flecs addons/app.c
 // Application runner with configurable run/frame actions
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - App Types
 
 /// Application descriptor.
 public struct ecs_app_desc_t {
@@ -26,15 +31,14 @@ public typealias ecs_app_run_action_t =
 public typealias ecs_app_frame_action_t =
     @convention(c) (UnsafeMutablePointer<ecs_world_t>, UnsafePointer<ecs_app_desc_t>) -> Int32
 
-// MARK: - Default Actions
 
 /// Default run action: loop calling frame action until quit.
 private func flecs_default_run_action(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ desc: UnsafeMutablePointer<ecs_app_desc_t>) -> Int32
 {
-    if let initFn = desc.pointee.init {
-        initFn(world)
+    if desc.pointee.`init` != nil {
+        desc.pointee.`init`!(world)
     }
 
     var result: Int32 = 0
@@ -61,12 +65,10 @@ private func flecs_default_frame_action(
     return ecs_progress(world, desc.pointee.delta_time) ? 0 : 1
 }
 
-// MARK: - Global State
 
 private var run_action: ecs_app_run_action_t = flecs_default_run_action
 private var frame_action: ecs_app_frame_action_t = flecs_default_frame_action
 
-// MARK: - Public API
 
 /// Run the application with the given descriptor.
 public func ecs_app_run(

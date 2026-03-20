@@ -1,7 +1,13 @@
 /// Vec.swift
 /// Translation of ecs_vec_t and its operations from flecs.
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
 /// Dynamic array with allocator support.
 public struct ecs_vec_t {
@@ -16,12 +22,11 @@ public struct ecs_vec_t {
     }
 }
 
-// MARK: - Helper
 
 @inline(__always)
 internal func ECS_ELEM(_ array: UnsafeMutableRawPointer?, _ size: ecs_size_t, _ index: Int32) -> UnsafeMutableRawPointer? {
-    guard let array = array else { return nil }
-    return array.advanced(by: Int(size) * Int(index))
+    if array == nil { return nil }
+    return array!.advanced(by: Int(size) * Int(index))
 }
 
 @inline(__always)
@@ -37,7 +42,6 @@ internal func flecs_next_pow_of_2(_ n: Int32) -> Int32 {
     return v + 1
 }
 
-// MARK: - Vec operations
 
 public func ecs_vec_init(
     _ allocator: UnsafeMutablePointer<ecs_allocator_t>?,
@@ -119,9 +123,10 @@ public func ecs_vec_remove(
     if index == v.pointee.count {
         return
     }
-    guard let dst = ECS_ELEM(v.pointee.array, size, index),
-          let src = ECS_ELEM(v.pointee.array, size, v.pointee.count) else { return }
-    memcpy(dst, src, Int(size))
+    let dst = ECS_ELEM(v.pointee.array, size, index)
+    let src = ECS_ELEM(v.pointee.array, size, v.pointee.count)
+    if dst == nil || src == nil { return }
+    memcpy(dst!, src!, Int(size))
 }
 
 public func ecs_vec_remove_ordered(
@@ -134,9 +139,10 @@ public func ecs_vec_remove_ordered(
     if index == newCount {
         return
     }
-    guard let dst = ECS_ELEM(v.pointee.array, size, index),
-          let src = ECS_ELEM(v.pointee.array, size, index + 1) else { return }
-    memmove(dst, src, Int(size) * Int(newCount - index))
+    let dst = ECS_ELEM(v.pointee.array, size, index)
+    let src = ECS_ELEM(v.pointee.array, size, index + 1)
+    if dst == nil || src == nil { return }
+    memmove(dst!, src!, Int(size) * Int(newCount - index))
 }
 
 public func ecs_vec_remove_last(
@@ -266,8 +272,9 @@ public func ecs_vec_set_min_count_zeromem(
     let count = vec.pointee.count
     if count < elem_count {
         ecs_vec_set_min_count(allocator, vec, size, elem_count)
-        if let ptr = ECS_ELEM(vec.pointee.array, size, count) {
-            memset(ptr, 0, Int(size) * Int(elem_count - count))
+        let ptr = ECS_ELEM(vec.pointee.array, size, count)
+        if ptr != nil {
+            memset(ptr!, 0, Int(size) * Int(elem_count - count))
         }
     }
 }

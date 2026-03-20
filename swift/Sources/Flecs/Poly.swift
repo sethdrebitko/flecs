@@ -1,9 +1,14 @@
 // Poly.swift - 1:1 translation of flecs poly.c
 // Functions for managing polymorphic flecs objects (world, query, observer)
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Mixin Types
 
 public enum ecs_mixin_kind_t: Int32 {
     case world = 0       // EcsMixinWorld
@@ -50,32 +55,29 @@ public struct ecs_mixins_t {
     }
 }
 
-// MARK: - Mixin Tables
 
 public var ecs_world_t_mixins = ecs_mixins_t()
 public var ecs_stage_t_mixins = ecs_mixins_t()
 public var ecs_observer_t_mixins = ecs_mixins_t()
 
-// MARK: - Internal
 
 private func assert_mixin(
     _ poly: UnsafeRawPointer?,
     _ kind: ecs_mixin_kind_t) -> UnsafeMutableRawPointer?
 {
-    guard let poly = poly else { return nil }
+    if poly == nil { return nil }
 
-    let hdr = poly.assumingMemoryBound(to: ecs_header_t.self)
-    guard hdr.pointee.type != 0 else { return nil }
-    guard let mixins = hdr.pointee.mixins else { return nil }
+    let hdr = poly!.assumingMemoryBound(to: ecs_header_t.self)
+    if hdr.pointee.type == 0 { return nil }
+    if hdr.pointee.mixins == nil { return nil }
 
-    let m = mixins.assumingMemoryBound(to: ecs_mixins_t.self)
+    let m = hdr.pointee.mixins!.assumingMemoryBound(to: ecs_mixins_t.self)
     let offset = m.pointee[kind]
     guard offset != 0 else { return nil }
 
-    return UnsafeMutableRawPointer(mutating: poly).advanced(by: Int(offset))
+    return UnsafeMutableRawPointer(mutating: poly!).advanced(by: Int(offset))
 }
 
-// MARK: - Public API
 
 /// Initialize a poly object.
 public func flecs_poly_init_(
@@ -84,15 +86,15 @@ public func flecs_poly_init_(
     _ size: ecs_size_t,
     _ mixins: UnsafeMutablePointer<ecs_mixins_t>?) -> UnsafeMutableRawPointer?
 {
-    guard let poly = poly else { return nil }
-    memset(poly, 0, Int(size))
+    if poly == nil { return nil }
+    memset(poly!, 0, Int(size))
 
-    let hdr = poly.assumingMemoryBound(to: ecs_header_t.self)
+    let hdr = poly!.assumingMemoryBound(to: ecs_header_t.self)
     hdr.pointee.type = type
     hdr.pointee.refcount = 1
     hdr.pointee.mixins = UnsafeMutableRawPointer(mixins)
 
-    return poly
+    return poly!
 }
 
 /// Finalize a poly object.
@@ -100,8 +102,8 @@ public func flecs_poly_fini_(
     _ poly: UnsafeMutableRawPointer?,
     _ type: Int32)
 {
-    guard let poly = poly else { return }
-    let hdr = poly.assumingMemoryBound(to: ecs_header_t.self)
+    if poly == nil { return }
+    let hdr = poly!.assumingMemoryBound(to: ecs_header_t.self)
     hdr.pointee.type = 0
 }
 
@@ -110,8 +112,8 @@ public func flecs_poly_fini_(
 public func flecs_poly_claim_(
     _ poly: UnsafeMutableRawPointer?) -> Int32
 {
-    guard let poly = poly else { return 0 }
-    let hdr = poly.assumingMemoryBound(to: ecs_header_t.self)
+    if poly == nil { return 0 }
+    let hdr = poly!.assumingMemoryBound(to: ecs_header_t.self)
     hdr.pointee.refcount += 1
     return hdr.pointee.refcount
 }
@@ -121,8 +123,8 @@ public func flecs_poly_claim_(
 public func flecs_poly_release_(
     _ poly: UnsafeMutableRawPointer?) -> Int32
 {
-    guard let poly = poly else { return 0 }
-    let hdr = poly.assumingMemoryBound(to: ecs_header_t.self)
+    if poly == nil { return 0 }
+    let hdr = poly!.assumingMemoryBound(to: ecs_header_t.self)
     hdr.pointee.refcount -= 1
     return hdr.pointee.refcount
 }
@@ -131,8 +133,8 @@ public func flecs_poly_release_(
 public func flecs_poly_refcount(
     _ poly: UnsafeMutableRawPointer?) -> Int32
 {
-    guard let poly = poly else { return 0 }
-    let hdr = poly.assumingMemoryBound(to: ecs_header_t.self)
+    if poly == nil { return 0 }
+    let hdr = poly!.assumingMemoryBound(to: ecs_header_t.self)
     return hdr.pointee.refcount
 }
 
@@ -141,8 +143,8 @@ public func flecs_poly_is_(
     _ poly: UnsafeRawPointer?,
     _ type: Int32) -> Bool
 {
-    guard let poly = poly else { return false }
-    let hdr = poly.assumingMemoryBound(to: ecs_header_t.self)
+    if poly == nil { return false }
+    let hdr = poly!.assumingMemoryBound(to: ecs_header_t.self)
     return hdr.pointee.type == type
 }
 
@@ -150,21 +152,23 @@ public func flecs_poly_is_(
 public func flecs_get_observable(
     _ poly: UnsafeRawPointer?) -> UnsafeMutablePointer<ecs_observable_t>?
 {
-    guard let ptr = assert_mixin(poly, .observable) else { return nil }
-    return ptr.bindMemory(to: ecs_observable_t.self, capacity: 1)
+    let ptr = assert_mixin(poly, .observable)
+    if ptr == nil { return nil }
+    return ptr!.bindMemory(to: ecs_observable_t.self, capacity: 1)
 }
 
 /// Get the world from a poly object (world or stage).
 public func ecs_get_world(
     _ poly: UnsafeRawPointer?) -> UnsafePointer<ecs_world_t>?
 {
-    guard let poly = poly else { return nil }
-    let hdr = poly.assumingMemoryBound(to: ecs_header_t.self)
+    if poly == nil { return nil }
+    let hdr = poly!.assumingMemoryBound(to: ecs_header_t.self)
     if hdr.pointee.type == ecs_world_t_magic {
-        return poly.assumingMemoryBound(to: ecs_world_t.self)
+        return poly!.assumingMemoryBound(to: ecs_world_t.self)
     }
-    guard let ptr = assert_mixin(poly, .world) else { return nil }
-    return ptr.assumingMemoryBound(to: UnsafeMutablePointer<ecs_world_t>.self)
+    let ptr = assert_mixin(poly!, .world)
+    if ptr == nil { return nil }
+    return ptr!.assumingMemoryBound(to: UnsafeMutablePointer<ecs_world_t>.self)
         .pointee.withMemoryRebound(to: ecs_world_t.self, capacity: 1) { UnsafePointer($0) }
 }
 
@@ -172,16 +176,18 @@ public func ecs_get_world(
 public func ecs_get_entity(
     _ poly: UnsafeRawPointer?) -> ecs_entity_t
 {
-    guard let ptr = assert_mixin(poly, .entity) else { return 0 }
-    return ptr.assumingMemoryBound(to: ecs_entity_t.self).pointee
+    let ptr = assert_mixin(poly, .entity)
+    if ptr == nil { return 0 }
+    return ptr!.assumingMemoryBound(to: ecs_entity_t.self).pointee
 }
 
 /// Get destructor mixin from poly object.
 public func flecs_get_dtor(
     _ poly: UnsafeRawPointer?) -> UnsafeMutablePointer<flecs_poly_dtor_t>?
 {
-    guard let ptr = assert_mixin(poly, .dtor) else { return nil }
-    return ptr.bindMemory(to: flecs_poly_dtor_t.self, capacity: 1)
+    let ptr = assert_mixin(poly, .dtor)
+    if ptr == nil { return nil }
+    return ptr!.bindMemory(to: flecs_poly_dtor_t.self, capacity: 1)
 }
 
 /// Bind a poly object to an entity, creating the (Poly, tag) pair.
@@ -227,8 +233,9 @@ public func flecs_poly_get_(
     _ entity: ecs_entity_t,
     _ tag: ecs_entity_t) -> UnsafeMutableRawPointer?
 {
-    guard let p = ecs_get_pair(world, entity, EcsPoly.self, tag) else {
+    let p = ecs_get_pair(world, entity, EcsPoly.self, tag)
+    if p == nil {
         return nil
     }
-    return p.pointee.poly
+    return p!.pointee.poly
 }

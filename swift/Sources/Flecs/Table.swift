@@ -1,9 +1,14 @@
 // Table.swift - 1:1 translation of flecs storage/table.c
 // Table storage: columns, entity movement, hooks, init/fini
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Type Info Flags
 
 /// Derive table flags from type info hooks.
 private func flecs_type_info_flags(
@@ -19,14 +24,14 @@ private func flecs_type_info_flags(
     return flags
 }
 
-// MARK: - Table Flag Initialization
 
 /// Scan a table's type to set flags for fast feature detection.
 private func flecs_table_init_flags(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ table: UnsafeMutablePointer<ecs_table_t>)
 {
-    guard let ids = table.pointee.type.array else { return }
+    if table.pointee.type.array == nil { return }
+    let ids = table.pointee.type.array!
     let count = table.pointee.type.count
     table.pointee.childof_index = -1
 
@@ -76,7 +81,6 @@ private func flecs_table_init_flags(
     }
 }
 
-// MARK: - Column Initialization
 
 /// Initialize table columns from the type and component records.
 private func flecs_table_init_columns(
@@ -85,7 +89,8 @@ private func flecs_table_init_columns(
     _ column_count: Int32)
 {
     let ids_count = table.pointee.type.count
-    guard let ids = table.pointee.type.array else { return }
+    if table.pointee.type.array == nil { return }
+    let ids = table.pointee.type.array!
 
     // Initialize component_map for fast small-id lookups
     for i in 0..<Int(ids_count) {
@@ -97,12 +102,13 @@ private func flecs_table_init_columns(
 
     if column_count == 0 { return }
 
-    let columns = UnsafeMutablePointer<ecs_column_t>.allocate(capacity: Int(column_count))
-    columns.initialize(repeating: ecs_column_t(), count: Int(column_count))
+    let columns = ecs_os_calloc_n(ecs_column_t.self, Int32(column_count))!
     table.pointee.data.columns = columns
 
-    guard let records = table.pointee._.pointee.records else { return }
-    guard let t2s = table.pointee.column_map else { return }
+    if table.pointee._.pointee.records == nil { return }
+    let records = table.pointee._.pointee.records!
+    if table.pointee.column_map == nil { return }
+    let t2s = table.pointee.column_map!
     let s2t = t2s + Int(ids_count)
 
     var cur: Int16 = 0
@@ -141,8 +147,7 @@ private func flecs_table_init_data(
     let meta = table.pointee._!
     let bs_count = meta.pointee.bs_count
     if bs_count > 0 {
-        meta.pointee.bs_columns = UnsafeMutablePointer<ecs_bitset_t>
-            .allocate(capacity: Int(bs_count))
+        meta.pointee.bs_columns = ecs_os_calloc_n(ecs_bitset_t.self, Int32(bs_count))!
         for i in 0..<Int(bs_count) {
             meta.pointee.bs_columns![i] = ecs_bitset_t()
             flecs_bitset_init(&meta.pointee.bs_columns![i])
@@ -150,7 +155,6 @@ private func flecs_table_init_data(
     }
 }
 
-// MARK: - Table Record Building
 
 /// Append a record to the temporary records vector.
 private func flecs_table_append_to_records(
@@ -163,20 +167,21 @@ private func flecs_table_append_to_records(
     let cr = flecs_components_ensure(world, id)
     let elem_size = Int32(MemoryLayout<ecs_table_record_t>.stride)
 
-    if let existing = flecs_component_get_table(UnsafePointer(cr), UnsafePointer(table)) {
-        let existing_mut = UnsafeMutablePointer(mutating: existing)
+    let existing = flecs_component_get_table(UnsafePointer(cr), UnsafePointer(table))
+    if existing != nil {
+        let existing_mut = UnsafeMutablePointer(mutating: existing!)
         existing_mut.pointee.count += 1
     } else {
-        guard let tr = ecs_vec_append(
+        let tr = ecs_vec_append(
             &world.pointee.allocator, records, elem_size)?
-            .bindMemory(to: ecs_table_record_t.self, capacity: 1) else { return }
-        tr.pointee.index = Int16(column)
-        tr.pointee.count = 1
-        ecs_table_cache_insert(&cr.pointee.cache, table, &tr.pointee.hdr)
+            .bindMemory(to: ecs_table_record_t.self, capacity: 1)
+        if tr == nil { return }
+        tr!.pointee.index = Int16(column)
+        tr!.pointee.count = 1
+        ecs_table_cache_insert(&cr.pointee.cache, table, &tr!.pointee.hdr)
     }
 }
 
-// MARK: - Main Table Init
 
 /// Main table initialization. Registers with id records and sets up storage.
 public func flecs_table_init(
@@ -188,7 +193,8 @@ public func flecs_table_init(
     flecs_table_init_flags(world, table)
 
     let dst_count = table.pointee.type.count
-    guard let dst_ids = table.pointee.type.array else { return }
+    if table.pointee.type.array == nil { return }
+    let dst_ids = table.pointee.type.array!
 
     // Build records vector
     let a = withUnsafeMutablePointer(to: &world.pointee.allocator) { $0 }
@@ -199,9 +205,10 @@ public func flecs_table_init(
     // Register each id in the type with its component record
     for i in 0..<Int(dst_count) {
         let cr = flecs_components_ensure(world, dst_ids[i])
-        guard let tr = ecs_vec_append(a, records, elem_size)?
-            .bindMemory(to: ecs_table_record_t.self, capacity: 1) else { continue }
-        tr.pointee.hdr.cr = cr
+        let tr = ecs_vec_append(a, records, elem_size)?
+            .bindMemory(to: ecs_table_record_t.self, capacity: 1)
+        if tr == nil { continue }
+        tr!.pointee.hdr.cr = cr
         tr.pointee.index = Int16(i)
         tr.pointee.count = 1
     }
@@ -217,9 +224,10 @@ public func flecs_table_init(
             if r != prev_r {
                 // Add (R, *) record
                 let cr = flecs_components_ensure(world, ecs_pair(r, EcsWildcard))
-                guard let tr = ecs_vec_append(a, records, elem_size)?
-                    .bindMemory(to: ecs_table_record_t.self, capacity: 1) else { continue }
-                tr.pointee.hdr.cr = cr
+                let tr = ecs_vec_append(a, records, elem_size)?
+                    .bindMemory(to: ecs_table_record_t.self, capacity: 1)
+                if tr == nil { continue }
+                tr!.pointee.hdr.cr = cr
                 tr.pointee.index = Int16(i)
                 tr.pointee.count = 1
                 prev_r = r
@@ -240,23 +248,27 @@ public func flecs_table_init(
     }
 
     // Add (*) and (*,*) wildcard records
-    if let cr_wc = world.pointee.cr_wildcard {
-        guard let tr = ecs_vec_append(a, records, elem_size)?
-            .bindMemory(to: ecs_table_record_t.self, capacity: 1) else { return }
-        tr.pointee.hdr.cr = cr_wc
-        tr.pointee.index = 0
-        tr.pointee.count = Int16(dst_count)
+    if world.pointee.cr_wildcard != nil {
+        let cr_wc = world.pointee.cr_wildcard!
+        let tr = ecs_vec_append(a, records, elem_size)?
+            .bindMemory(to: ecs_table_record_t.self, capacity: 1)
+        if tr == nil { return }
+        tr!.pointee.hdr.cr = cr_wc
+        tr!.pointee.index = 0
+        tr!.pointee.count = Int16(dst_count)
     }
 
     // Add (ChildOf, 0) record if no ChildOf/Parent
     let has_childof = (table.pointee.flags & (EcsTableHasChildOf | EcsTableHasParent)) != 0
     if !has_childof {
-        if let cr = world.pointee.cr_childof_0 {
-            guard let tr = ecs_vec_append(a, records, elem_size)?
-                .bindMemory(to: ecs_table_record_t.self, capacity: 1) else { return }
-            tr.pointee.hdr.cr = cr
-            tr.pointee.index = -1
-            tr.pointee.count = 0
+        if world.pointee.cr_childof_0 != nil {
+            let cr = world.pointee.cr_childof_0!
+            let tr = ecs_vec_append(a, records, elem_size)?
+                .bindMemory(to: ecs_table_record_t.self, capacity: 1)
+            if tr == nil { return }
+            tr!.pointee.hdr.cr = cr
+            tr!.pointee.index = -1
+            tr!.pointee.count = 0
         }
     }
 
@@ -265,8 +277,7 @@ public func flecs_table_init(
     if record_count > 0 {
         let src_records = ecs_vec_first(records)!
             .bindMemory(to: ecs_table_record_t.self, capacity: Int(record_count))
-        let dst_records = UnsafeMutablePointer<ecs_table_record_t>
-            .allocate(capacity: Int(record_count))
+        let dst_records = ecs_os_calloc_n(ecs_table_record_t.self, Int32(record_count))!
         dst_records.update(from: src_records, count: Int(record_count))
 
         table.pointee._.pointee.record_count = Int16(record_count)
@@ -296,16 +307,11 @@ public func flecs_table_init(
         }
 
         // Allocate component_map and column_map
-        table.pointee.component_map = UnsafeMutablePointer<Int16>
-            .allocate(capacity: Int(FLECS_HI_COMPONENT_ID))
-        table.pointee.component_map!.initialize(
-            repeating: 0, count: Int(FLECS_HI_COMPONENT_ID))
+        table.pointee.component_map = ecs_os_calloc_n(Int16.self, Int32(FLECS_HI_COMPONENT_ID))!
 
         if column_count > 0 {
             let map_size = Int(dst_count) + Int(column_count)
-            table.pointee.column_map = UnsafeMutablePointer<Int16>
-                .allocate(capacity: map_size)
-            table.pointee.column_map!.initialize(repeating: 0, count: map_size)
+            table.pointee.column_map = ecs_os_calloc_n(Int16.self, Int32(map_size))!
         }
 
         table.pointee.column_count = Int16(column_count)
@@ -336,7 +342,6 @@ private func flecs_table_emit(
     ecs_defer_end(world)
 }
 
-// MARK: - Table Record Unregistration
 
 /// Unregister a table from all its component record caches.
 private func flecs_table_records_unregister(
@@ -344,7 +349,8 @@ private func flecs_table_records_unregister(
     _ table: UnsafeMutablePointer<ecs_table_t>)
 {
     let count = table.pointee._.pointee.record_count
-    guard let records = table.pointee._.pointee.records else { return }
+    if table.pointee._.pointee.records == nil { return }
+    let records = table.pointee._.pointee.records!
 
     for i in 0..<Int(count) {
         let cr = records[i].hdr.cr!
@@ -352,10 +358,9 @@ private func flecs_table_records_unregister(
         flecs_component_release(world, cr)
     }
 
-    records.deallocate()
+    ecs_os_free(UnsafeMutableRawPointer(records))
 }
 
-// MARK: - Trigger Flags
 
 /// Add trigger flags to a table for observer matching.
 public func flecs_table_add_trigger_flags(
@@ -381,7 +386,6 @@ public func flecs_table_add_trigger_flags(
     }
 }
 
-// MARK: - Table Hook Invocation
 
 /// Invoke a type hook for entities in a column range.
 public func flecs_table_invoke_hook(
@@ -413,10 +417,10 @@ public func flecs_table_invoke_dtor(
     _ row: Int32,
     _ count: Int32)
 {
-    guard let ti = column.pointee.ti else { return }
-    guard let data = column.pointee.data else { return }
-    let ptr = data + Int(row) * Int(ti.pointee.size)
-    flecs_type_info_dtor(ptr, count, UnsafePointer(ti))
+    if column.pointee.ti == nil { return }
+    if column.pointee.data == nil { return }
+    let ptr = column.pointee.data! + Int(row) * Int(column.pointee.ti!.pointee.size)
+    flecs_type_info_dtor(ptr, count, UnsafePointer(column.pointee.ti!))
 }
 
 /// Construct components in a column range.
@@ -428,10 +432,10 @@ public func flecs_table_invoke_ctor(
     _ count: Int32)
 {
     let column = table.pointee.data.columns! + Int(column_index)
-    guard let ti = column.pointee.ti else { return }
-    guard let data = column.pointee.data else { return }
-    let ptr = data + Int(row) * Int(ti.pointee.size)
-    flecs_type_info_ctor(ptr, count, UnsafePointer(ti))
+    if column.pointee.ti == nil { return }
+    if column.pointee.data == nil { return }
+    let ptr = column.pointee.data! + Int(row) * Int(column.pointee.ti!.pointee.size)
+    flecs_type_info_ctor(ptr, count, UnsafePointer(column.pointee.ti!))
 }
 
 /// Run add hooks (construct + on_add).
@@ -445,14 +449,14 @@ public func flecs_table_invoke_add_hooks(
     _ construct: Bool)
 {
     let column = table.pointee.data.columns! + Int(column_index)
-    guard let ti = column.pointee.ti else { return }
+    if column.pointee.ti == nil { return }
 
     if construct {
         flecs_table_invoke_ctor(world, table, column_index, row, count)
     }
 
-    if let on_add = ti.pointee.hooks.on_add {
-        flecs_table_invoke_hook(world, table, on_add, EcsOnAdd,
+    if column.pointee.ti!.pointee.hooks.on_add != nil {
+        flecs_table_invoke_hook(world, table, column.pointee.ti!.pointee.hooks.on_add!, EcsOnAdd,
             column, entities, row, count)
     }
 }
@@ -467,10 +471,10 @@ public func flecs_table_invoke_remove_hooks(
     _ count: Int32,
     _ dtor: Bool)
 {
-    guard let ti = column.pointee.ti else { return }
+    if column.pointee.ti == nil { return }
 
-    if let on_remove = ti.pointee.hooks.on_remove {
-        flecs_table_invoke_hook(world, table, on_remove, EcsOnRemove,
+    if column.pointee.ti!.pointee.hooks.on_remove != nil {
+        flecs_table_invoke_hook(world, table, column.pointee.ti!.pointee.hooks.on_remove!, EcsOnRemove,
             column, entities, row, count)
     }
 
@@ -479,7 +483,6 @@ public func flecs_table_invoke_remove_hooks(
     }
 }
 
-// MARK: - Table Fini
 
 /// Finalize and free all table resources.
 public func flecs_table_fini(
@@ -507,14 +510,14 @@ public func flecs_table_fini(
     }
 
     // Free column map, component map, records
-    if let cm = table.pointee.column_map { cm.deallocate() }
-    if let cm = table.pointee.component_map { cm.deallocate() }
+    if table.pointee.column_map != nil { ecs_os_free(UnsafeMutableRawPointer(table.pointee.column_map)) }
+    if table.pointee.component_map != nil { ecs_os_free(UnsafeMutableRawPointer(table.pointee.component_map)) }
     flecs_table_records_unregister(world, table)
 
     world.pointee.info.table_count -= 1
     world.pointee.info.table_delete_total += 1
 
-    table.pointee._.deallocate()
+    ecs_os_free(UnsafeMutableRawPointer(table.pointee._))
 
     if (world.pointee.flags & EcsWorldFini) == 0 && !is_root {
         flecs_table_free_type(world, table)
@@ -535,20 +538,21 @@ private func flecs_table_fini_data(
     flecs_table_dtor_all(world, table)
 
     if deallocate {
-        if let columns = table.pointee.data.columns {
+        if table.pointee.data.columns != nil {
+            let columns = table.pointee.data.columns!
             let column_count = table.pointee.column_count
             for c in 0..<Int(column_count) {
-                if let ti = columns[c].ti, let data = columns[c].data {
-                    let v = ecs_vec_from_column(&columns[c], table, ti.pointee.size)
-                    ecs_vec_fini(nil, &v, ti.pointee.size)
+                if columns[c].ti != nil && columns[c].data != nil {
+                    let v = ecs_vec_from_column(&columns[c], table, columns[c].ti!.pointee.size)
+                    ecs_vec_fini(nil, &v, columns[c].ti!.pointee.size)
                 }
             }
-            columns.deallocate()
+            ecs_os_free(UnsafeMutableRawPointer(columns))
             table.pointee.data.columns = nil
         }
 
-        if let entities = table.pointee.data.entities {
-            entities.deallocate()
+        if table.pointee.data.entities != nil {
+            ecs_os_free(UnsafeMutableRawPointer(table.pointee.data.entities!))
             table.pointee.data.entities = nil
             table.pointee.data.size = 0
         }
@@ -565,7 +569,8 @@ private func flecs_table_dtor_all(
     let count = table.pointee.data.count
     if count == 0 { return }
 
-    guard let entities = table.pointee.data.entities else { return }
+    if table.pointee.data.entities == nil { return }
+    let entities = table.pointee.data.entities!
     let column_count = table.pointee.column_count
 
     // Invalidate reachable caches
@@ -575,10 +580,11 @@ private func flecs_table_dtor_all(
 
     if (table.pointee.flags & EcsTableHasDtors) != 0 {
         // Run on_remove hooks
-        if let columns = table.pointee.data.columns {
+        if table.pointee.data.columns != nil {
+            let columns = table.pointee.data.columns!
             for c in 0..<Int(column_count) {
-                if let on_remove = columns[c].ti?.pointee.hooks.on_remove {
-                    flecs_table_invoke_hook(world, table, on_remove, EcsOnRemove,
+                if columns[c].ti?.pointee.hooks.on_remove != nil {
+                    flecs_table_invoke_hook(world, table, columns[c].ti!.pointee.hooks.on_remove!, EcsOnRemove,
                         &columns[c], entities, 0, count)
                 }
             }
@@ -617,12 +623,11 @@ public func flecs_table_free_type(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ table: UnsafeMutablePointer<ecs_table_t>)
 {
-    if let array = table.pointee.type.array {
-        array.deallocate()
+    if table.pointee.type.array != nil {
+        ecs_os_free(UnsafeMutableRawPointer(table.pointee.type.array))
     }
 }
 
-// MARK: - Table Traversable Tracking
 
 /// Track traversable entity count for early-out in event propagation.
 public func flecs_table_traversable_add(
@@ -638,7 +643,6 @@ public func flecs_table_traversable_add(
     }
 }
 
-// MARK: - Dirty State
 
 /// Mark a table column as dirty (for query change tracking).
 public func flecs_table_mark_dirty(
@@ -646,17 +650,20 @@ public func flecs_table_mark_dirty(
     _ table: UnsafeMutablePointer<ecs_table_t>,
     _ component: ecs_entity_t)
 {
-    guard let dirty_state = table.pointee.dirty_state else { return }
+    if table.pointee.dirty_state == nil { return }
+    let dirty_state = table.pointee.dirty_state!
 
     if component < FLECS_HI_COMPONENT_ID {
         let column = table.pointee.component_map![Int(component)]
         if column <= 0 { return }
         dirty_state[Int(column)] += 1
     } else {
-        guard let cr = flecs_components_get(UnsafePointer(world), component) else { return }
-        guard let tr = flecs_component_get_table(UnsafePointer(cr), UnsafePointer(table)) else { return }
-        if tr.pointee.column == -1 { return }
-        dirty_state[Int(tr.pointee.column + 1)] += 1
+        let cr = flecs_components_get(UnsafePointer(world), component)
+        if cr == nil { return }
+        let tr = flecs_component_get_table(UnsafePointer(cr!), UnsafePointer(table))
+        if tr == nil { return }
+        if tr!.pointee.column == -1 { return }
+        dirty_state[Int(tr!.pointee.column + 1)] += 1
     }
 }
 
@@ -667,8 +674,7 @@ public func flecs_table_get_dirty_state(
 {
     if table.pointee.dirty_state == nil {
         let column_count = Int(table.pointee.column_count) + 1
-        table.pointee.dirty_state = UnsafeMutablePointer<Int32>
-            .allocate(capacity: column_count)
+        table.pointee.dirty_state = ecs_os_calloc_n(Int32.self, Int32(column_count))!
         for i in 0..<column_count {
             table.pointee.dirty_state![i] = 1
         }
@@ -676,7 +682,6 @@ public func flecs_table_get_dirty_state(
     return table.pointee.dirty_state!
 }
 
-// MARK: - Public Table API
 
 /// Get the entities array from a table.
 public func ecs_table_entities(

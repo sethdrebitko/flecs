@@ -1,9 +1,14 @@
 // Ref.swift - 1:1 translation of flecs ref.c
 // Refs provide faster access to components than get
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Ref Init
 
 /// Initialize a ref for fast repeated access to an entity's component.
 /// The ref caches the table and column, only updating when the table changes.
@@ -17,32 +22,34 @@ public func ecs_ref_init_id(
 
     let w = ecs_get_world(UnsafeRawPointer(world))!
 
-    guard let record = flecs_entities_get(w, entity) else {
+    let record = flecs_entities_get(w, entity)
+    if record == nil {
         return ecs_ref_t()
     }
 
     var result = ecs_ref_t()
     result.entity = entity
     result.id = id
-    result.record = UnsafeMutablePointer(mutating: record)
+    result.record = UnsafeMutablePointer(mutating: record!)
 
-    guard let table = record.pointee.table else {
+    if record!.pointee.table == nil {
         return ecs_ref_t()
     }
+    let table = record!.pointee.table!
 
     result.table_id = table.pointee.id
     result.table_version = table.pointee.version
 
     // Get cached component pointer
-    if let cr = flecs_components_get(w, id) {
+    let cr = flecs_components_get(w, id)
+    if cr != nil {
         result.ptr = flecs_get_component(
-            w, table, ECS_RECORD_TO_ROW(record.pointee.row), cr)
+            w, table, ECS_RECORD_TO_ROW(record!.pointee.row), cr!)
     }
 
     return result
 }
 
-// MARK: - Ref Update
 
 /// Update a ref after potential table changes.
 /// Uses fast version check to skip work when nothing changed.
@@ -52,15 +59,17 @@ public func ecs_ref_update(
 {
     guard ref.pointee.entity != 0 else { return }
     guard ref.pointee.id != 0 else { return }
-    guard let record = ref.pointee.record else { return }
+    if ref.pointee.record == nil { return }
+    let record = ref.pointee.record!
 
-    guard let table = record.pointee.table else {
+    if record.pointee.table == nil {
         // Entity was deleted
         ref.pointee.table_id = 0
         ref.pointee.table_version = 0
         ref.pointee.ptr = nil
         return
     }
+    let table = record.pointee.table!
 
     if !ecs_is_alive(world, ref.pointee.entity) {
         ref.pointee.table_id = 0
@@ -80,15 +89,15 @@ public func ecs_ref_update(
     ref.pointee.table_id = table.pointee.id
     ref.pointee.table_version = table.pointee.version
 
-    if let cr = flecs_components_get(world, ref.pointee.id) {
+    let cr = flecs_components_get(world, ref.pointee.id)
+    if cr != nil {
         ref.pointee.ptr = flecs_get_component(
-            world, table, ECS_RECORD_TO_ROW(record.pointee.row), cr)
+            world, table, ECS_RECORD_TO_ROW(record.pointee.row), cr!)
     } else {
         ref.pointee.ptr = nil
     }
 }
 
-// MARK: - Ref Get
 
 /// Get a component pointer from a ref, updating if necessary.
 public func ecs_ref_get_id(

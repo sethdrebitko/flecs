@@ -1,7 +1,12 @@
 // InternalTypes.swift - Internal ECS types
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Table Diff Builder
 public struct ecs_table_diff_builder_t {
     public var added: ecs_vec_t = ecs_vec_t()
     public var removed: ecs_vec_t = ecs_vec_t()
@@ -10,7 +15,6 @@ public struct ecs_table_diff_builder_t {
     public init() {}
 }
 
-// MARK: - Graph Edge Types
 public struct ecs_graph_edge_hdr_t {
     public var prev: UnsafeMutablePointer<ecs_graph_edge_hdr_t>? = nil
     public var next: UnsafeMutablePointer<ecs_graph_edge_hdr_t>? = nil
@@ -39,7 +43,6 @@ public struct ecs_graph_node_t {
     public init() {}
 }
 
-// MARK: - Table Types
 
 public struct ecs_column_t {
     public var data: UnsafeMutableRawPointer? = nil
@@ -77,13 +80,12 @@ public struct ecs_data_t {
     public init() {}
 }
 
-public enum ecs_table_eventkind_t: Int32 {
-    case triggersForId = 0
-    case noTriggersForId = 1
-}
+public typealias ecs_table_eventkind_t = Int32
+public let EcsTableTriggersForId: ecs_table_eventkind_t = 0
+public let EcsTableNoTriggersForId: ecs_table_eventkind_t = 1
 
 public struct ecs_table_event_t {
-    public var kind: ecs_table_eventkind_t = .triggersForId
+    public var kind: ecs_table_eventkind_t = EcsTableTriggersForId
     public var component: ecs_entity_t = 0
     public var event: ecs_entity_t = 0
     public init() {}
@@ -122,7 +124,6 @@ public struct ecs_table_t {
     public init() {}
 }
 
-// MARK: - Table Cache
 
 public struct ecs_table_cache_list_t {
     public var first: UnsafeMutablePointer<ecs_table_cache_hdr_t>? = nil
@@ -137,7 +138,6 @@ public struct ecs_table_cache_t {
     public init() {}
 }
 
-// MARK: - Component Index Types
 
 public struct ecs_id_record_elem_t {
     public var prev: UnsafeMutablePointer<ecs_component_record_t>? = nil
@@ -188,7 +188,6 @@ public struct ecs_component_record_t {
     public init() {}
 }
 
-// MARK: - World Internal Types
 
 public let ECS_TABLE_VERSION_ARRAY_BITMASK: Int = 0xff
 public let ECS_TABLE_VERSION_ARRAY_SIZE: Int = ECS_TABLE_VERSION_ARRAY_BITMASK + 1
@@ -244,7 +243,6 @@ public struct ecs_action_elem_t {
 
 public typealias ecs_on_commands_action_t = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void
 
-// MARK: - Stage
 
 public struct ecs_stage_allocators_t {
     public var iter_stack: ecs_stack_t = ecs_stack_t()
@@ -277,7 +275,6 @@ public struct ecs_stage_t {
     public init() {}
 }
 
-// MARK: - The World
 
 // Note: ecs_world_t needs to reference ecs_table_t via store, but ecs_table_t is defined in this file.
 // Forward reference issue resolved since both are in the same module.

@@ -1,9 +1,14 @@
 // BuiltinEntities.swift - 1:1 translation of flecs built-in entity IDs
 // These are the well-known entity IDs assigned during bootstrap
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Built-in Component IDs (1..8)
 
 public var FLECS_IDEcsComponentID_: ecs_entity_t = 1
 public var FLECS_IDEcsIdentifierID_: ecs_entity_t = 2
@@ -12,7 +17,6 @@ public var FLECS_IDEcsParentID_: ecs_entity_t = 4
 public var FLECS_IDEcsTreeSpawnerID_: ecs_entity_t = 5
 public var FLECS_IDEcsDefaultChildComponentID_: ecs_entity_t = 6
 
-// MARK: - Built-in Entity IDs (> FLECS_HI_COMPONENT_ID)
 
 // Hierarchy
 public var EcsFlecs: ecs_entity_t = UInt64(FLECS_HI_COMPONENT_ID) + 1

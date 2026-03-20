@@ -1,9 +1,14 @@
 // QueryCache.swift - 1:1 translation of flecs query/cache/*.c
 // Query result caching: table matching, change detection, grouping, ordering
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Cache Types
 
 /// Trivial cache match element (minimal data for simple queries).
 public struct ecs_query_triv_cache_match_t {
@@ -69,14 +74,14 @@ public struct ecs_query_cache_t {
     public init() {}
 }
 
-// MARK: - Cache Queries
 
 /// Check if a cache is trivial (simple single-field queries).
 public func flecs_query_cache_is_trivial(
     _ cache: UnsafePointer<ecs_query_cache_t>) -> Bool
 {
-    guard let q = cache.pointee.query else { return false }
-    return (q.pointee.flags & EcsQueryTrivialCache) != 0
+    let q = cache.pointee.query
+    if q == nil { return false }
+    return (q!.pointee.flags & EcsQueryTrivialCache) != 0
 }
 
 /// Get the element size for cache entries (trivial vs full).
@@ -89,7 +94,6 @@ public func flecs_query_cache_elem_size(
     return ecs_size_t(MemoryLayout<ecs_query_cache_match_t>.stride)
 }
 
-// MARK: - Default Group By
 
 /// Default group_by callback: groups tables by relationship target.
 public func flecs_query_cache_default_group_by(
@@ -118,13 +122,13 @@ public func flecs_query_cache_group_by_cascade(
     _ id: ecs_id_t,
     _ ctx: UnsafeMutableRawPointer?) -> UInt64
 {
-    guard let term = ctx?.bindMemory(to: ecs_term_t.self, capacity: 1) else { return 0 }
-    let rel = term.pointee.trav
+    let term = ctx?.bindMemory(to: ecs_term_t.self, capacity: 1)
+    if term == nil { return 0 }
+    let rel = term!.pointee.trav
     let depth = flecs_relation_depth(UnsafePointer(world), rel, UnsafePointer(table))
     return UInt64(depth)
 }
 
-// MARK: - Cache Init / Fini
 
 /// Initialize a query cache from a query.
 public func flecs_query_cache_init(
@@ -132,22 +136,24 @@ public func flecs_query_cache_init(
     _ desc: UnsafePointer<ecs_query_desc_t>) -> Int32
 {
     let q = withUnsafeMutablePointer(to: &impl.pointee.pub) { $0 }
-    guard let world = q.pointee.real_world?.assumingMemoryBound(
-        to: ecs_world_t.self) else { return -1 }
+    let world = q.pointee.real_world?.assumingMemoryBound(
+        to: ecs_world_t.self)
+    if world == nil { return -1 }
 
-    let cache = UnsafeMutablePointer<ecs_query_cache_t>.allocate(capacity: 1)
-    cache.initialize(to: ecs_query_cache_t())
+    let cache = ecs_os_calloc_t(ecs_query_cache_t.self)!
+    cache.pointee = ecs_query_cache_t()
     impl.pointee.cache = UnsafeMutableRawPointer(cache)
 
     cache.pointee.entity = q.pointee.entity
-    ecs_map_init(&cache.pointee.tables, &world.pointee.allocator)
+    ecs_map_init(&cache.pointee.tables, &world!.pointee.allocator)
 
     // Set up group_by if provided
     if desc.pointee.group_by != 0 {
-        ecs_map_init(&cache.pointee.groups, &world.pointee.allocator)
+        ecs_map_init(&cache.pointee.groups, &world!.pointee.allocator)
         cache.pointee.cascade_by = desc.pointee.group_by
 
-        if let group_by = desc.pointee.group_by_callback {
+        let group_by = desc.pointee.group_by_callback
+        if group_by != nil {
             cache.pointee.group_by_callback = group_by
         } else {
             cache.pointee.group_by_callback = flecs_query_cache_default_group_by
@@ -160,7 +166,8 @@ public func flecs_query_cache_init(
     }
 
     // Set up order_by if provided
-    if let order_by = desc.pointee.order_by_callback {
+    let order_by = desc.pointee.order_by_callback
+    if order_by != nil {
         cache.pointee.order_by_callback = order_by
         cache.pointee.order_by = desc.pointee.order_by
     }
@@ -173,21 +180,22 @@ public func flecs_query_cache_init(
 
     var cache_term_count: Int32 = 0
     let term_count = Int(q.pointee.term_count)
-    guard let terms = q.pointee.terms else { return -1 }
+    let terms = q.pointee.terms
+    if terms == nil { return -1 }
 
     withUnsafeMutablePointer(to: &cache_desc.terms) { dst_ptr in
         let dst = UnsafeMutableRawPointer(dst_ptr).assumingMemoryBound(
             to: ecs_term_t.self)
         for i in 0..<term_count {
-            if (terms[i].flags_ & EcsTermIsCacheable) != 0 {
-                dst[Int(cache_term_count)] = terms[i]
+            if (terms![i].flags_ & EcsTermIsCacheable) != 0 {
+                dst[Int(cache_term_count)] = terms![i]
                 cache_term_count += 1
             }
         }
     }
 
     if cache_term_count > 0 {
-        cache.pointee.query = ecs_query_init(world, &cache_desc)
+        cache.pointee.query = ecs_query_init(world!, &cache_desc)
         if cache.pointee.query == nil {
             flecs_query_cache_fini(impl)
             return -1
@@ -196,12 +204,11 @@ public func flecs_query_cache_init(
 
     // Build field map (cache field -> query field)
     if cache_term_count != Int32(term_count) && cache_term_count > 0 {
-        cache.pointee.field_map = UnsafeMutablePointer<Int8>
-            .allocate(capacity: Int(cache_term_count))
+        cache.pointee.field_map = ecs_os_calloc_n(Int8.self, cache_term_count)!
         var cache_field: Int32 = 0
         for i in 0..<term_count {
-            if (terms[i].flags_ & EcsTermIsCacheable) != 0 {
-                cache.pointee.field_map![Int(cache_field)] = terms[i].field_index
+            if (terms![i].flags_ & EcsTermIsCacheable) != 0 {
+                cache.pointee.field_map![Int(cache_field)] = terms![i].field_index
                 cache_field += 1
             }
         }
@@ -214,41 +221,42 @@ public func flecs_query_cache_init(
 public func flecs_query_cache_fini(
     _ impl: UnsafeMutablePointer<ecs_query_impl_t>)
 {
-    guard let cache_ptr = impl.pointee.cache else { return }
-    let cache = cache_ptr.bindMemory(to: ecs_query_cache_t.self, capacity: 1)
+    let cache_ptr = impl.pointee.cache
+    if cache_ptr == nil { return }
+    let cache = cache_ptr!.bindMemory(to: ecs_query_cache_t.self, capacity: 1)
 
     // Free cache query
-    if let q = cache.pointee.query {
-        ecs_query_fini(q)
+    if cache.pointee.query != nil {
+        ecs_query_fini(cache.pointee.query)
     }
 
     // Free field map
-    cache.pointee.field_map?.deallocate()
+    if cache.pointee.field_map != nil { ecs_os_free(UnsafeMutableRawPointer(cache.pointee.field_map)) }
 
     // Free group_by context
-    if let ctx_free = cache.pointee.group_by_ctx_free,
-       let ctx = cache.pointee.group_by_ctx
-    {
-        ctx_free(ctx)
+    let ctx_free = cache.pointee.group_by_ctx_free
+    let ctx = cache.pointee.group_by_ctx
+    if ctx_free != nil && ctx != nil {
+        ctx_free!(ctx!)
     }
 
     // Free maps
     ecs_map_fini(&cache.pointee.tables)
     ecs_map_fini(&cache.pointee.groups)
 
-    cache.deallocate()
+    ecs_os_free(UnsafeMutableRawPointer(cache))
     impl.pointee.cache = nil
 }
 
-// MARK: - Change Detection
 
 /// Check if a query has changed since the last iteration.
 public func ecs_query_changed(
     _ q: UnsafeMutablePointer<ecs_query_t>) -> Bool
 {
     let impl = flecs_query_impl(UnsafePointer(q))
-    guard let cache_ptr = impl.pointee.cache else { return false }
-    let cache = cache_ptr.bindMemory(to: ecs_query_cache_t.self, capacity: 1)
+    let cache_ptr = impl.pointee.cache
+    if cache_ptr == nil { return false }
+    let cache = cache_ptr!.bindMemory(to: ecs_query_cache_t.self, capacity: 1)
 
     return cache.pointee.match_count != cache.pointee.prev_match_count
 }
@@ -260,7 +268,6 @@ public func flecs_query_cache_mark_iterated(
     cache.pointee.prev_match_count = cache.pointee.match_count
 }
 
-// MARK: - Group API
 
 /// Set group iteration for a query iterator.
 public func ecs_query_set_group(
@@ -279,12 +286,14 @@ public func ecs_query_get_group_ctx(
     _ group_id: UInt64) -> UnsafeMutableRawPointer?
 {
     let impl = flecs_query_impl(q)
-    guard let cache_ptr = impl.pointee.cache else { return nil }
-    let cache = cache_ptr.bindMemory(to: ecs_query_cache_t.self, capacity: 1)
+    let cache_ptr = impl.pointee.cache
+    if cache_ptr == nil { return nil }
+    let cache = cache_ptr!.bindMemory(to: ecs_query_cache_t.self, capacity: 1)
 
-    guard let val = ecs_map_get(&cache.pointee.groups, group_id) else { return nil }
+    let val = ecs_map_get(&cache.pointee.groups, group_id)
+    if val == nil { return nil }
     let group = UnsafeMutablePointer<ecs_query_cache_group_t>(
-        bitPattern: UInt(val.pointee))
+        bitPattern: UInt(val!.pointee))
     return group != nil ? UnsafeMutableRawPointer(group) : nil
 }
 
@@ -297,7 +306,6 @@ public func ecs_query_get_group_info(
     return nil
 }
 
-// MARK: - Cache Table Notifications
 
 /// Handle table event (observer notification for cache updates).
 public func flecs_query_cache_notify(
@@ -317,14 +325,13 @@ public func flecs_query_cache_notify(
     }
 }
 
-// MARK: - Order By
 
 /// Sort query results by a component using a comparator.
 public func flecs_query_cache_sort(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ cache: UnsafeMutablePointer<ecs_query_cache_t>)
 {
-    guard cache.pointee.order_by_callback != nil else { return }
+    if cache.pointee.order_by_callback == nil { return }
 
     // Would sort each matched table's entities using qsort with the
     // provided comparator, then build a list of (table, offset, count)
@@ -332,7 +339,6 @@ public func flecs_query_cache_sort(
     // This is stored in cache->table_slices.
 }
 
-// MARK: - Rematch
 
 /// Rematch query cache (re-evaluate which tables match).
 /// Called when a parent or traversable target changes a matched component.

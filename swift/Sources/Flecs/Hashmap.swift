@@ -2,9 +2,14 @@
 /// Translation of ecs_hashmap_t and its operations from flecs.
 /// Hashmap with variable-sized keys/values built on top of ecs_map_t.
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Types
 
 // ecs_hash_value_action_t and ecs_compare_action_t defined in Structs.swift
 
@@ -62,7 +67,6 @@ public struct flecs_hashmap_result_t {
     }
 }
 
-// MARK: - Internal helpers
 
 private func flecs_hashmap_find_key(
     _ map: UnsafePointer<ecs_hashmap_t>,
@@ -71,12 +75,13 @@ private func flecs_hashmap_find_key(
     _ key: UnsafeRawPointer) -> Int32
 {
     let count = ecs_vec_count(keys)
-    guard let key_array = ecs_vec_first(keys) else {
+    let key_array = ecs_vec_first(keys)
+    if key_array == nil {
         return -1
     }
     for i in 0..<Int(count) {
-        let key_ptr = key_array.advanced(by: Int(key_size) * i)
-        if let compare = map.pointee.compare, compare(key_ptr, key) == 0 {
+        let key_ptr = key_array!.advanced(by: Int(key_size) * i)
+        if map.pointee.compare != nil && map.pointee.compare!(key_ptr, key) == 0 {
             return Int32(i)
         }
     }
@@ -86,7 +91,7 @@ private func flecs_hashmap_find_key(
 private func flecs_hm_bucket_new(
     _ map: UnsafeMutablePointer<ecs_hashmap_t>) -> UnsafeMutablePointer<ecs_hm_bucket_t>
 {
-    let bucket = UnsafeMutablePointer<ecs_hm_bucket_t>.allocate(capacity: 1)
+    let bucket = ecs_os_calloc_t(ecs_hm_bucket_t.self)!
     bucket.pointee = ecs_hm_bucket_t()
     return bucket
 }
@@ -95,10 +100,9 @@ private func flecs_hm_bucket_free_internal(
     _ map: UnsafeMutablePointer<ecs_hashmap_t>,
     _ bucket: UnsafeMutablePointer<ecs_hm_bucket_t>)
 {
-    bucket.deallocate()
+    ecs_os_free(UnsafeMutableRawPointer(bucket))
 }
 
-// MARK: - Public API
 
 /// Initialize a hashmap.
 public func flecs_hashmap_init_(
@@ -124,8 +128,9 @@ public func flecs_hashmap_fini(
     var it = ecs_map_iter(&map.pointee.impl)
 
     while ecs_map_next(&it) {
-        if let bucket_raw = ecs_map_ptr(&it) {
-            let bucket = bucket_raw.bindMemory(to: ecs_hm_bucket_t.self, capacity: 1)
+        let bucket_raw = ecs_map_ptr(&it)
+        if bucket_raw != nil {
+            let bucket = bucket_raw!.bindMemory(to: ecs_hm_bucket_t.self, capacity: 1)
             ecs_vec_fini(a, &bucket.pointee.keys, map.pointee.key_size)
             ecs_vec_fini(a, &bucket.pointee.values, map.pointee.value_size)
             flecs_hm_bucket_free_internal(map, bucket)
@@ -142,17 +147,18 @@ public func flecs_hashmap_get_(
     _ key: UnsafeRawPointer,
     _ value_size: ecs_size_t) -> UnsafeMutableRawPointer?
 {
-    guard let hash_fn = map.pointee.hash else { return nil }
-    let hash = hash_fn(key)
+    if map.pointee.hash == nil { return nil }
+    let hash = map.pointee.hash!(key)
 
     // We need a mutable pointer to call ecs_map_get on the impl field.
     // The map itself is logically const; this is safe because ecs_map_get doesn't mutate.
     let map_mut = UnsafeMutablePointer(mutating: map)
-    guard let bucket_val = ecs_map_get(&map_mut.pointee.impl, hash) else {
+    let bucket_val = ecs_map_get(&map_mut.pointee.impl, hash)
+    if bucket_val == nil {
         return nil
     }
-    let bucket_ptr_val = bucket_val.pointee
-    guard bucket_ptr_val != 0 else { return nil }
+    let bucket_ptr_val = bucket_val!.pointee
+    if bucket_ptr_val == 0 { return nil }
     let bucket = UnsafeMutableRawPointer(bitPattern: UInt(bucket_ptr_val))!
         .bindMemory(to: ecs_hm_bucket_t.self, capacity: 1)
 
@@ -171,10 +177,10 @@ public func flecs_hashmap_ensure_(
     _ key: UnsafeRawPointer,
     _ value_size: ecs_size_t) -> flecs_hashmap_result_t
 {
-    guard let hash_fn = map.pointee.hash else {
+    if map.pointee.hash == nil {
         return flecs_hashmap_result_t()
     }
-    let hash = hash_fn(key)
+    let hash = map.pointee.hash!(key)
 
     let r = ecs_map_ensure(&map.pointee.impl, hash)
     var bucket: UnsafeMutablePointer<ecs_hm_bucket_t>
@@ -196,11 +202,11 @@ public func flecs_hashmap_ensure_(
         ecs_vec_init(a, &bucket.pointee.values, value_size, 1)
         key_ptr = ecs_vec_append(a, &bucket.pointee.keys, key_size)
         value_ptr = ecs_vec_append(a, &bucket.pointee.values, value_size)
-        if let kp = key_ptr {
-            memcpy(kp, key, Int(key_size))
+        if key_ptr != nil {
+            memcpy(key_ptr!, key, Int(key_size))
         }
-        if let vp = value_ptr {
-            memset(vp, 0, Int(value_size))
+        if value_ptr != nil {
+            memset(value_ptr!, 0, Int(value_size))
         }
     } else {
         let index = flecs_hashmap_find_key(
@@ -208,11 +214,11 @@ public func flecs_hashmap_ensure_(
         if index == -1 {
             key_ptr = ecs_vec_append(a, &bucket.pointee.keys, key_size)
             value_ptr = ecs_vec_append(a, &bucket.pointee.values, value_size)
-            if let kp = key_ptr {
-                memcpy(kp, key, Int(key_size))
+            if key_ptr != nil {
+                memcpy(key_ptr!, key, Int(key_size))
             }
-            if let vp = value_ptr {
-                memset(vp, 0, Int(value_size))
+            if value_ptr != nil {
+                memset(value_ptr!, 0, Int(value_size))
             }
         } else {
             key_ptr = ecs_vec_get(&bucket.pointee.keys, key_size, index)
@@ -236,8 +242,8 @@ public func flecs_hashmap_set_(
     _ value: UnsafeRawPointer)
 {
     let result = flecs_hashmap_ensure_(map, key_size, key, value_size)
-    if let vp = result.value {
-        memcpy(vp, value, Int(value_size))
+    if result.value != nil {
+        memcpy(result.value!, value, Int(value_size))
     }
 }
 
@@ -247,10 +253,11 @@ public func flecs_hashmap_get_bucket(
     _ hash: UInt64) -> UnsafeMutablePointer<ecs_hm_bucket_t>?
 {
     let map_mut = UnsafeMutablePointer(mutating: map)
-    guard let val = ecs_map_get(&map_mut.pointee.impl, hash) else {
+    let val = ecs_map_get(&map_mut.pointee.impl, hash)
+    if val == nil {
         return nil
     }
-    let ptr_val = val.pointee
+    let ptr_val = val!.pointee
     if ptr_val == 0 { return nil }
     return UnsafeMutableRawPointer(bitPattern: UInt(ptr_val))?
         .bindMemory(to: ecs_hm_bucket_t.self, capacity: 1)
@@ -283,16 +290,17 @@ public func flecs_hashmap_remove_w_hash_(
     _ value_size: ecs_size_t,
     _ hash: UInt64)
 {
-    guard let bucket = flecs_hashmap_get_bucket(UnsafePointer(map), hash) else {
+    let bucket = flecs_hashmap_get_bucket(UnsafePointer(map), hash)
+    if bucket == nil {
         return
     }
 
-    let index = flecs_hashmap_find_key(UnsafePointer(map), &bucket.pointee.keys, key_size, key)
+    let index = flecs_hashmap_find_key(UnsafePointer(map), &bucket!.pointee.keys, key_size, key)
     if index == -1 {
         return
     }
 
-    flecs_hm_bucket_remove(map, bucket, hash, index)
+    flecs_hm_bucket_remove(map, bucket!, hash, index)
 }
 
 /// Remove a key from the hashmap.
@@ -302,8 +310,8 @@ public func flecs_hashmap_remove_(
     _ key: UnsafeRawPointer,
     _ value_size: ecs_size_t)
 {
-    guard let hash_fn = map.pointee.hash else { return }
-    let hash = hash_fn(key)
+    if map.pointee.hash == nil { return }
+    let hash = map.pointee.hash!(key)
     flecs_hashmap_remove_w_hash_(map, key_size, key, value_size, hash)
 }
 
@@ -323,9 +331,10 @@ public func flecs_hashmap_copy(
     let a = dst.pointee.impl.allocator
     var it = ecs_map_iter(&dst.pointee.impl)
     while ecs_map_next(&it) {
-        guard let res = it.res else { continue }
+        if it.res == nil { continue }
+        let res = it.res!
         let src_bucket_val = res[1]
-        guard src_bucket_val != 0 else { continue }
+        if src_bucket_val == 0 { continue }
         let src_bucket = UnsafeMutableRawPointer(bitPattern: UInt(src_bucket_val))!
             .bindMemory(to: ecs_hm_bucket_t.self, capacity: 1)
 
@@ -362,8 +371,8 @@ public func flecs_hashmap_next_(
     {
         _ = ecs_map_next(&it.pointee.it)
         let ptr = ecs_map_ptr(&it.pointee.it)
-        if let ptr = ptr {
-            it.pointee.bucket = ptr.bindMemory(to: ecs_hm_bucket_t.self, capacity: 1)
+        if ptr != nil {
+            it.pointee.bucket = ptr!.bindMemory(to: ecs_hm_bucket_t.self, capacity: 1)
             bucket = it.pointee.bucket
         } else {
             it.pointee.bucket = nil
@@ -372,13 +381,13 @@ public func flecs_hashmap_next_(
         it.pointee.index = 0
     }
 
-    guard let bucket = bucket else { return nil }
+    if bucket == nil { return nil }
     let index = it.pointee.index
 
-    if let key_out = key_out, key_size > 0 {
-        let key_ptr = ecs_vec_get(&bucket.pointee.keys, key_size, index)
-        key_out.storeBytes(of: key_ptr, as: UnsafeMutableRawPointer?.self)
+    if key_out != nil && key_size > 0 {
+        let key_ptr = ecs_vec_get(&bucket!.pointee.keys, key_size, index)
+        key_out!.storeBytes(of: key_ptr, as: UnsafeMutableRawPointer?.self)
     }
 
-    return ecs_vec_get(&bucket.pointee.values, value_size, index)
+    return ecs_vec_get(&bucket!.pointee.values, value_size, index)
 }

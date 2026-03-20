@@ -1,9 +1,14 @@
 // OnDelete.swift - 1:1 translation of flecs on_delete.c
 // Implementation of OnDelete/OnDeleteTarget cleanup policies
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Delete Action Macros
 
 /// Extract OnDelete action from component record flags (bits 0-2).
 @inline(__always)
@@ -23,7 +28,6 @@ public func ECS_ID_ON_DELETE_TARGET(_ flags: ecs_flags32_t) -> ecs_entity_t {
     return EcsRemove
 }
 
-// MARK: - Internal Mark Phase
 
 /// Push a component record onto the marked-for-delete stack.
 private func flecs_marked_id_push(
@@ -33,12 +37,13 @@ private func flecs_marked_id_push(
     _ delete_id: Bool)
 {
     let elem_size = Int32(MemoryLayout<ecs_marked_id_t>.stride)
-    guard let m_ptr = ecs_vec_append(
+    let m_ptr = ecs_vec_append(
         &world.pointee.allocator,
         &world.pointee.store.marked_ids,
-        elem_size) else { return }
+        elem_size)
+    if m_ptr == nil { return }
 
-    let m = m_ptr.bindMemory(to: ecs_marked_id_t.self, capacity: 1)
+    let m = m_ptr!.bindMemory(to: ecs_marked_id_t.self, capacity: 1)
     m.pointee.cr = cr
     m.pointee.id = cr.pointee.id
     m.pointee.action = action
@@ -53,11 +58,11 @@ private func flecs_targets_mark_for_delete(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ table: UnsafeMutablePointer<ecs_table_t>)
 {
-    guard let entities = table.pointee.data.entities else { return }
+    if table.pointee.data.entities == nil { return }
     let count = table.pointee.data.count
 
     for i in 0..<Int(count) {
-        flecs_target_mark_for_delete(world, entities[i])
+        flecs_target_mark_for_delete(world, table.pointee.data.entities![i])
     }
 }
 
@@ -66,32 +71,37 @@ private func flecs_target_mark_for_delete(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ e: ecs_entity_t)
 {
-    guard let r = flecs_entities_get(UnsafePointer(world), e) else { return }
+    let r = flecs_entities_get(UnsafePointer(world), e)
+    if r == nil { return }
 
-    let flags = r.pointee.row & ECS_ROW_FLAGS_MASK
+    let flags = r!.pointee.row & ECS_ROW_FLAGS_MASK
     if (flags & (EcsEntityIsId | EcsEntityIsTarget)) == 0 {
         return
     }
 
     if (flags & EcsEntityIsId) != 0 {
-        if let cr = flecs_components_get(UnsafePointer(world), e) {
-            flecs_component_mark_for_delete(world, cr,
-                ECS_ID_ON_DELETE(cr.pointee.flags), true)
+        let cr1 = flecs_components_get(UnsafePointer(world), e)
+        if cr1 != nil {
+            flecs_component_mark_for_delete(world, cr1!,
+                ECS_ID_ON_DELETE(cr1!.pointee.flags), true)
         }
-        if let cr = flecs_components_get(UnsafePointer(world), ecs_pair(e, EcsWildcard)) {
-            flecs_component_mark_for_delete(world, cr,
-                ECS_ID_ON_DELETE(cr.pointee.flags), true)
+        let cr2 = flecs_components_get(UnsafePointer(world), ecs_pair(e, EcsWildcard))
+        if cr2 != nil {
+            flecs_component_mark_for_delete(world, cr2!,
+                ECS_ID_ON_DELETE(cr2!.pointee.flags), true)
         }
     }
 
     if (flags & EcsEntityIsTarget) != 0 {
-        if let cr = flecs_components_get(UnsafePointer(world), ecs_pair(EcsWildcard, e)) {
-            flecs_component_mark_for_delete(world, cr,
-                ECS_ID_ON_DELETE_TARGET(cr.pointee.flags), true)
+        let cr3 = flecs_components_get(UnsafePointer(world), ecs_pair(EcsWildcard, e))
+        if cr3 != nil {
+            flecs_component_mark_for_delete(world, cr3!,
+                ECS_ID_ON_DELETE_TARGET(cr3!.pointee.flags), true)
         }
-        if let cr = flecs_components_get(UnsafePointer(world), ecs_pair(EcsFlag, e)) {
-            flecs_component_mark_for_delete(world, cr,
-                ECS_ID_ON_DELETE_TARGET(cr.pointee.flags), true)
+        let cr4 = flecs_components_get(UnsafePointer(world), ecs_pair(EcsFlag, e))
+        if cr4 != nil {
+            flecs_component_mark_for_delete(world, cr4!,
+                ECS_ID_ON_DELETE_TARGET(cr4!.pointee.flags), true)
         }
     }
 }
@@ -131,15 +141,15 @@ private func flecs_component_mark_for_delete(
     if ecs_id_is_wildcard(id) {
         if ECS_PAIR_SECOND(id) == EcsWildcard {
             var cur = flecs_component_first_next(cr)
-            while let c = cur {
-                c.pointee.flags |= EcsIdMarkedForDelete
-                cur = flecs_component_first_next(c)
+            while cur != nil {
+                cur!.pointee.flags |= EcsIdMarkedForDelete
+                cur = flecs_component_first_next(cur!)
             }
         } else {
             var cur = flecs_component_second_next(cr)
-            while let c = cur {
-                c.pointee.flags |= EcsIdMarkedForDelete
-                cur = flecs_component_second_next(c)
+            while cur != nil {
+                cur!.pointee.flags |= EcsIdMarkedForDelete
+                cur = flecs_component_second_next(cur!)
             }
         }
     }
@@ -147,7 +157,6 @@ private func flecs_component_mark_for_delete(
     _ = delete_target
 }
 
-// MARK: - Public API
 
 /// Main on-delete entry point. Marks ids for deletion and cleans up.
 public func flecs_on_delete(
@@ -176,10 +185,11 @@ public func flecs_on_delete(
         // Cleanup type info for deleted components
         let del_count = ecs_vec_count(&world.pointee.store.deleted_components)
         if del_count > 0 {
-            if let comps = ecs_vec_first(&world.pointee.store.deleted_components)?
-                .bindMemory(to: ecs_entity_t.self, capacity: Int(del_count)) {
+            let comps = ecs_vec_first(&world.pointee.store.deleted_components)?
+                .bindMemory(to: ecs_entity_t.self, capacity: Int(del_count))
+            if comps != nil {
                 for i in 0..<Int(del_count) {
-                    flecs_type_info_free(world, comps[i])
+                    flecs_type_info_free(world, comps![i])
                 }
             }
             ecs_vec_clear(&world.pointee.store.deleted_components)
@@ -194,14 +204,15 @@ private func flecs_on_delete_mark(
     _ action: ecs_entity_t,
     _ delete_id: Bool) -> Bool
 {
-    guard let cr = flecs_components_get(UnsafePointer(world), id) else {
+    let cr = flecs_components_get(UnsafePointer(world), id)
+    if cr == nil {
         return false
     }
 
     var resolved_action = action
     if resolved_action == 0 {
         if !ecs_id_is_pair(id) || ECS_PAIR_SECOND(id) == EcsWildcard {
-            resolved_action = ECS_ID_ON_DELETE(cr.pointee.flags)
+            resolved_action = ECS_ID_ON_DELETE(cr!.pointee.flags)
         }
     }
 
@@ -210,7 +221,7 @@ private func flecs_on_delete_mark(
         return false
     }
 
-    flecs_component_mark_for_delete(world, cr, resolved_action, delete_id)
+    flecs_component_mark_for_delete(world, cr!, resolved_action, delete_id)
     return true
 }
 
@@ -230,20 +241,21 @@ private func flecs_on_delete_clear_ids(
     _ force_delete: Bool)
 {
     let count = ecs_vec_count(&world.pointee.store.marked_ids)
-    guard count > 0 else { return }
+    if count <= 0 { return }
 
-    guard let ids = ecs_vec_first(&world.pointee.store.marked_ids)?
-        .bindMemory(to: ecs_marked_id_t.self, capacity: Int(count)) else { return }
+    let ids = ecs_vec_first(&world.pointee.store.marked_ids)?
+        .bindMemory(to: ecs_marked_id_t.self, capacity: Int(count))
+    if ids == nil { return }
 
     // Two passes: non-wildcards first, then wildcards
     for pass in 0..<2 {
         for i in 0..<Int(count) {
-            let is_wildcard = ecs_id_is_wildcard(ids[i].id)
+            let is_wildcard = ecs_id_is_wildcard(ids![i].id)
             if pass == 0 && is_wildcard { continue }
             if pass == 1 && !is_wildcard { continue }
 
-            let cr = ids[i].cr!
-            let delete_id = ids[i].delete_id
+            let cr = ids![i].cr!
+            let delete_id = ids![i].delete_id
 
             // Release the claim taken by flecs_marked_id_push
             let rc = flecs_component_release(world, cr)
@@ -281,7 +293,6 @@ public func flecs_type_info_free(
     // Already partially implemented in TypeInfo.swift
 }
 
-// MARK: - Public Delete/Remove All
 
 /// Delete all entities matching an id.
 public func ecs_delete_with(

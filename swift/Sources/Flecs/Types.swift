@@ -1,15 +1,19 @@
 // Types.swift - 1:1 translation of flecs core types
 // All fundamental types, constants, enums, and flags
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Version
 
 public let FLECS_VERSION_MAJOR: Int32 = 4
 public let FLECS_VERSION_MINOR: Int32 = 1
 public let FLECS_VERSION_PATCH: Int32 = 5
 
-// MARK: - Configuration Constants
 
 public let FLECS_HI_COMPONENT_ID: Int32 = 256
 public let FLECS_HI_ID_RECORD_ID: Int32 = 1024
@@ -29,7 +33,6 @@ public let EcsFirstUserEntityId: ecs_entity_t = UInt64(FLECS_HI_COMPONENT_ID) + 
 public let ECS_MAX_RECURSION: Int32 = 512
 public let ECS_MAX_TOKEN_SIZE: Int32 = 256
 
-// MARK: - Fundamental Type Aliases
 
 public typealias ecs_id_t = UInt64
 public typealias ecs_entity_t = UInt64
@@ -45,14 +48,12 @@ public typealias ecs_map_data_t = UInt64
 public typealias ecs_map_key_t = UInt64
 public typealias ecs_map_val_t = UInt64
 
-// MARK: - Magic Numbers
 
 public let ecs_world_t_magic: Int32 = 0x65637377
 public let ecs_stage_t_magic: Int32 = 0x65637373
 public let ecs_query_t_magic: Int32 = 0x65637375
 public let ecs_observer_t_magic: Int32 = 0x65637362
 
-// MARK: - Entity ID Masks and Helpers
 
 public let ECS_ROW_MASK: UInt32 = 0x0FFFFFFF
 public let ECS_ROW_FLAGS_MASK: UInt32 = ~UInt32(0x0FFFFFFF)
@@ -144,7 +145,6 @@ public func ecs_value_pair(_ rel: ecs_entity_t, _ val: ecs_entity_t) -> ecs_id_t
     return ECS_VALUE_PAIR | ecs_entity_t_comb(ecs_entity_t_lo(val), ecs_entity_t_lo(rel))
 }
 
-// MARK: - Term Reference Flags
 
 public let EcsSelf: UInt64 = 1 << 63
 public let EcsUp: UInt64 = 1 << 62
@@ -157,7 +157,6 @@ public let EcsIsName: UInt64 = 1 << 56
 public let EcsTraverseFlags: UInt64 = EcsSelf | EcsUp | EcsTrav | EcsCascade | EcsDesc
 public let EcsTermRefFlags: UInt64 = EcsTraverseFlags | EcsIsVariable | EcsIsEntity | EcsIsName
 
-// MARK: - World Flags
 
 public let EcsWorldQuitWorkers: UInt32 = 1 << 0
 public let EcsWorldReadonly: UInt32 = 1 << 1
@@ -169,14 +168,12 @@ public let EcsWorldMeasureSystemTime: UInt32 = 1 << 6
 public let EcsWorldMultiThreaded: UInt32 = 1 << 7
 public let EcsWorldFrameInProgress: UInt32 = 1 << 8
 
-// MARK: - Entity Flags (upper bits of ecs_record_t::row)
 
 public let EcsEntityIsId: UInt32 = 1 << 31
 public let EcsEntityIsTarget: UInt32 = 1 << 30
 public let EcsEntityIsTraversable: UInt32 = 1 << 29
 public let EcsEntityHasDontFragment: UInt32 = 1 << 28
 
-// MARK: - ID Flags (ecs_component_record_t::flags)
 
 public let EcsIdOnDeleteRemove: UInt32 = 1 << 0
 public let EcsIdOnDeleteDelete: UInt32 = 1 << 1
@@ -211,13 +208,11 @@ public let EcsIdPrefabChildren: UInt32 = 1 << 26
 public let EcsIdMarkedForDelete: UInt32 = 1 << 30
 public let EcsIdEventMask: UInt32 = (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20) | (1 << 21) | (1 << 24)
 
-// MARK: - Non-Trivial Flags
 
 public let EcsNonTrivialIdSparse: UInt8 = 1 << 0
 public let EcsNonTrivialIdNonFragmenting: UInt8 = 1 << 1
 public let EcsNonTrivialIdInherit: UInt8 = 1 << 2
 
-// MARK: - Iterator Flags
 
 public let EcsIterIsValid: UInt32 = 1 << 0
 public let EcsIterNoData: UInt32 = 1 << 1
@@ -238,12 +233,10 @@ public let EcsIterCppEach: UInt32 = 1 << 19
 public let EcsIterTableOnly: UInt32 = 1 << 20
 public let EcsIterImmutableCacheData: UInt32 = 1 << 21
 
-// MARK: - Event Flags
 
 public let EcsEventTableOnly: UInt32 = 1 << 20
 public let EcsEventNoOnSet: UInt32 = 1 << 16
 
-// MARK: - Query Flags (internal, set by query implementation)
 
 public let EcsQueryMatchThis: UInt32 = 1 << 11
 public let EcsQueryMatchOnlyThis: UInt32 = 1 << 12
@@ -267,7 +260,6 @@ public let EcsQueryNested: UInt32 = 1 << 29
 public let EcsQueryCacheWithFilter: UInt32 = 1 << 30
 public let EcsQueryValid: UInt32 = 1 << 31
 
-// MARK: - Query Descriptor Flags
 
 public let EcsQueryMatchPrefab: UInt32 = 1 << 1
 public let EcsQueryMatchDisabled: UInt32 = 1 << 2
@@ -276,7 +268,6 @@ public let EcsQueryAllowUnresolvedByName: UInt32 = 1 << 6
 public let EcsQueryTableOnlyFlag: UInt32 = 1 << 7
 public let EcsQueryDetectChanges: UInt32 = 1 << 8
 
-// MARK: - Term Flags
 
 public let EcsTermMatchAny: UInt16 = 1 << 0
 public let EcsTermMatchAnySrc: UInt16 = 1 << 1
@@ -293,7 +284,6 @@ public let EcsTermIsOr: UInt16 = 1 << 11
 public let EcsTermDontFragment: UInt16 = 1 << 12
 public let EcsTermNonFragmentingChildOf: UInt16 = 1 << 13
 
-// MARK: - Observer Flags
 
 public let EcsObserverMatchPrefab: UInt32 = 1 << 1
 public let EcsObserverMatchDisabled: UInt32 = 1 << 2
@@ -306,7 +296,6 @@ public let EcsObserverYieldOnCreate: UInt32 = 1 << 8
 public let EcsObserverYieldOnDelete: UInt32 = 1 << 9
 public let EcsObserverKeepAlive: UInt32 = 1 << 11
 
-// MARK: - Table Flags
 
 public let EcsTableHasBuiltins: UInt32 = 1 << 0
 public let EcsTableIsPrefab: UInt32 = 1 << 1
@@ -347,12 +336,10 @@ public let EcsTableEdgeFlags: UInt32 = (1 << 16) | (1 << 17) | (1 << 21)
 public let EcsTableAddEdgeFlags: UInt32 = (1 << 16) | (1 << 21)
 public let EcsTableRemoveEdgeFlags: UInt32 = (1 << 17) | (1 << 21) | (1 << 24)
 
-// MARK: - Aperiodic Action Flags
 
 public let EcsAperiodicComponentMonitors: UInt32 = 1 << 2
 public let EcsAperiodicEmptyQueries: UInt32 = 1 << 4
 
-// MARK: - Type Hook Flags
 
 public let ECS_TYPE_HOOK_CTOR: ecs_flags32_t = 1 << 0
 public let ECS_TYPE_HOOK_DTOR: ecs_flags32_t = 1 << 1
@@ -377,35 +364,30 @@ public let ECS_TYPE_HOOK_CMP_ILLEGAL: ecs_flags32_t = 1 << 19
 public let ECS_TYPE_HOOK_EQUALS_ILLEGAL: ecs_flags32_t = 1 << 20
 public let ECS_TYPE_HOOK_IN_USE: ecs_flags32_t = 1 << 21
 
-// MARK: - Enums
 
-public enum EcsInoutKind: Int16 {
-    case inOutDefault = 0
-    case inOutNone = 1
-    case inOutFilter = 2
-    case inOut = 3
-    case `in` = 4
-    case out = 5
-}
+public typealias ecs_inout_kind_t = Int16
+public let EcsInOutDefault: ecs_inout_kind_t = 0
+public let EcsInOutNone: ecs_inout_kind_t = 1
+public let EcsInOutFilter: ecs_inout_kind_t = 2
+public let EcsInOut: ecs_inout_kind_t = 3
+public let EcsIn: ecs_inout_kind_t = 4
+public let EcsOut: ecs_inout_kind_t = 5
 
-public enum EcsOperKind: Int16 {
-    case and = 0
-    case or = 1
-    case not = 2
-    case optional = 3
-    case andFrom = 4
-    case orFrom = 5
-    case notFrom = 6
-}
+public typealias ecs_oper_kind_t = Int16
+public let EcsAnd: ecs_oper_kind_t = 0
+public let EcsOr: ecs_oper_kind_t = 1
+public let EcsNot: ecs_oper_kind_t = 2
+public let EcsOptional: ecs_oper_kind_t = 3
+public let EcsAndFrom: ecs_oper_kind_t = 4
+public let EcsOrFrom: ecs_oper_kind_t = 5
+public let EcsNotFrom: ecs_oper_kind_t = 6
 
-public enum EcsQueryCacheKind: Int32 {
-    case `default` = 0
-    case auto = 1
-    case all = 2
-    case none = 3
-}
+public typealias ecs_query_cache_kind_t = Int32
+public let EcsQueryCacheDefault: ecs_query_cache_kind_t = 0
+public let EcsQueryCacheAuto: ecs_query_cache_kind_t = 1
+public let EcsQueryCacheAll: ecs_query_cache_kind_t = 2
+public let EcsQueryCacheNone: ecs_query_cache_kind_t = 3
 
-// MARK: - Utility Functions
 
 @inline(__always)
 public func ECS_ALIGN(_ size: Int32, _ alignment: Int32) -> ecs_size_t {
@@ -414,8 +396,8 @@ public func ECS_ALIGN(_ size: Int32, _ alignment: Int32) -> ecs_size_t {
 
 @inline(__always)
 public func ECS_OFFSET(_ ptr: UnsafeMutableRawPointer?, _ offset: Int) -> UnsafeMutableRawPointer? {
-    guard let ptr = ptr else { return nil }
-    return ptr.advanced(by: offset)
+    if ptr == nil { return nil }
+    return ptr!.advanced(by: offset)
 }
 
 @inline(__always)
@@ -438,7 +420,6 @@ public func ECS_BIT_IS_SET(_ flags: UInt32, _ bit: UInt32) -> Bool {
     return (flags & bit) != 0
 }
 
-// MARK: - ECS_TERM_REF helpers
 
 @inline(__always)
 public func ECS_TERM_REF_FLAGS(_ ref: ecs_term_ref_t) -> UInt64 {

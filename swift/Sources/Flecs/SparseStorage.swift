@@ -1,9 +1,14 @@
 // SparseStorage.swift - 1:1 translation of flecs storage/sparse_storage.c
 // Sparse component storage for non-fragmenting components
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Sparse Has
 
 /// Check if a sparse component exists for an entity.
 /// Handles wildcard ids by iterating matching component records.
@@ -19,12 +24,12 @@ public func flecs_component_sparse_has(
                 (cr.pointee.flags & EcsIdDontFragment) != 0
             {
                 var cur = flecs_component_first_next(cr)
-                while let c = cur {
-                    if c.pointee.sparse != nil &&
-                        flecs_sparse_has(c.pointee.sparse!, entity) {
+                while cur != nil {
+                    if cur!.pointee.sparse != nil &&
+                        flecs_sparse_has(cur!.pointee.sparse!, entity) {
                         return true
                     }
-                    cur = flecs_component_first_next(c)
+                    cur = flecs_component_first_next(cur!)
                 }
             }
 
@@ -33,12 +38,12 @@ public func flecs_component_sparse_has(
                 (cr.pointee.flags & EcsIdMatchDontFragment) != 0
             {
                 var cur = flecs_component_second_next(cr)
-                while let c = cur {
-                    if c.pointee.sparse != nil &&
-                        flecs_sparse_has(c.pointee.sparse!, entity) {
+                while cur != nil {
+                    if cur!.pointee.sparse != nil &&
+                        flecs_sparse_has(cur!.pointee.sparse!, entity) {
                         return true
                     }
-                    cur = flecs_component_second_next(c)
+                    cur = flecs_component_second_next(cur!)
                 }
             }
 
@@ -46,12 +51,11 @@ public func flecs_component_sparse_has(
         }
         return false
     } else {
-        guard let sparse = cr.pointee.sparse else { return false }
-        return flecs_sparse_has(sparse, entity)
+        if cr.pointee.sparse == nil { return false }
+        return flecs_sparse_has(cr.pointee.sparse!, entity)
     }
 }
 
-// MARK: - Sparse Get
 
 /// Get a sparse component pointer for an entity.
 /// Handles wildcard resolution through table records or parent sparse sets.
@@ -66,59 +70,66 @@ public func flecs_component_sparse_get(
     }
 
     // Wildcard resolution requires a table
-    guard let table = table else { return nil }
+    if table == nil { return nil }
 
     var resolved_cr = cr
 
     if (cr.pointee.flags & EcsIdDontFragment) == 0 {
         // Fragmenting wildcard: resolve through table record
-        guard let tr = flecs_component_get_table(UnsafePointer(cr), UnsafePointer(table)) else {
+        let tr = flecs_component_get_table(UnsafePointer(cr), UnsafePointer(table!))
+        if tr == nil {
             return nil
         }
-        guard let records = table.pointee._.pointee.records else { return nil }
-        let ttr = records[Int(tr.pointee.index)]
+        if table!.pointee._.pointee.records == nil { return nil }
+        let ttr = table!.pointee._.pointee.records![Int(tr!.pointee.index)]
         resolved_cr = ttr.hdr.cr!
     } else {
         // Non-fragmenting wildcard: resolve through parent sparse
         if (cr.pointee.flags & EcsIdExclusive) != 0 {
-            guard let tgt_ptr = flecs_sparse_get(
+            let tgt_ptr = flecs_sparse_get(
                 cr.pointee.sparse, Int32(MemoryLayout<ecs_entity_t>.stride), entity)?
-                .bindMemory(to: ecs_entity_t.self, capacity: 1) else {
+                .bindMemory(to: ecs_entity_t.self, capacity: 1)
+            if tgt_ptr == nil {
                 return nil
             }
-            let tgt = tgt_ptr.pointee
+            let tgt = tgt_ptr!.pointee
 
             if ECS_PAIR_FIRST(cr.pointee.id) == EcsWildcard {
-                guard let c = flecs_components_get(
+                let c = flecs_components_get(
                     UnsafePointer(world),
-                    ecs_pair(tgt, ECS_PAIR_SECOND(cr.pointee.id))) else { return nil }
-                resolved_cr = c
+                    ecs_pair(tgt, ECS_PAIR_SECOND(cr.pointee.id)))
+                if c == nil { return nil }
+                resolved_cr = c!
             } else {
-                guard let c = flecs_components_get(
+                let c = flecs_components_get(
                     UnsafePointer(world),
-                    ecs_pair(ECS_PAIR_FIRST(cr.pointee.id), tgt)) else { return nil }
-                resolved_cr = c
+                    ecs_pair(ECS_PAIR_FIRST(cr.pointee.id), tgt))
+                if c == nil { return nil }
+                resolved_cr = c!
             }
         } else {
-            guard let type = flecs_sparse_get(
+            let type = flecs_sparse_get(
                 cr.pointee.sparse,
                 Int32(MemoryLayout<ecs_type_t>.stride), entity)?
-                .bindMemory(to: ecs_type_t.self, capacity: 1) else {
+                .bindMemory(to: ecs_type_t.self, capacity: 1)
+            if type == nil {
                 return nil
             }
-            guard let array = type.pointee.array else { return nil }
-            let tgt = array[0]
+            if type!.pointee.array == nil { return nil }
+            let tgt = type!.pointee.array![0]
 
             if ECS_PAIR_FIRST(cr.pointee.id) == EcsWildcard {
-                guard let c = flecs_components_get(
+                let c = flecs_components_get(
                     UnsafePointer(world),
-                    ecs_pair(tgt, ECS_PAIR_SECOND(cr.pointee.id))) else { return nil }
-                resolved_cr = c
+                    ecs_pair(tgt, ECS_PAIR_SECOND(cr.pointee.id)))
+                if c == nil { return nil }
+                resolved_cr = c!
             } else {
-                guard let c = flecs_components_get(
+                let c = flecs_components_get(
                     UnsafePointer(world),
-                    ecs_pair(ECS_PAIR_FIRST(cr.pointee.id), tgt)) else { return nil }
-                resolved_cr = c
+                    ecs_pair(ECS_PAIR_FIRST(cr.pointee.id), tgt))
+                if c == nil { return nil }
+                resolved_cr = c!
             }
         }
     }
@@ -126,7 +137,6 @@ public func flecs_component_sparse_get(
     return flecs_sparse_get(resolved_cr.pointee.sparse, 0, entity)
 }
 
-// MARK: - Sparse Remove
 
 /// Remove a sparse component from an entity at a table row.
 private func flecs_component_sparse_remove_intern(
@@ -135,8 +145,8 @@ private func flecs_component_sparse_remove_intern(
     _ table: UnsafeMutablePointer<ecs_table_t>,
     _ row: Int32) -> ecs_entity_t
 {
-    guard let entities = table.pointee.data.entities else { return 0 }
-    let entity = entities[Int(row)]
+    if table.pointee.data.entities == nil { return 0 }
+    let entity = table.pointee.data.entities![Int(row)]
     let ti = cr.pointee.type_info
 
     if ti == nil {
@@ -146,22 +156,23 @@ private func flecs_component_sparse_remove_intern(
         return 0
     }
 
-    guard let ptr = flecs_sparse_get(cr.pointee.sparse, 0, entity) else {
+    let ptr = flecs_sparse_get(cr.pointee.sparse, 0, entity)
+    if ptr == nil {
         return 0
     }
 
     // Invoke on_remove hook
-    if let on_remove = ti?.pointee.hooks.on_remove {
+    if ti!.pointee.hooks.on_remove != nil {
         var entity_mut = entity
         let tr: UnsafePointer<ecs_table_record_t>? =
             (cr.pointee.flags & EcsIdDontFragment) == 0
             ? flecs_component_get_table(UnsafePointer(cr), UnsafePointer(table))
             : nil
         flecs_invoke_hook(world, table, cr, tr, 1, row, &entity_mut,
-            cr.pointee.id, UnsafePointer(ti!), EcsOnRemove, on_remove)
+            cr.pointee.id, UnsafePointer(ti!), EcsOnRemove, ti!.pointee.hooks.on_remove!)
     }
 
-    flecs_type_info_dtor(ptr, 1, UnsafePointer(ti!))
+    flecs_type_info_dtor(ptr!, 1, UnsafePointer(ti!))
     flecs_sparse_remove(cr.pointee.sparse!, 0, entity)
 
     return entity
@@ -180,15 +191,15 @@ public func flecs_component_sparse_remove(
 
     // Wildcard removal: iterate all matching component records
     if dont_fragment && ecs_id_is_wildcard(cr.pointee.id) {
-        guard let entities = table.pointee.data.entities else { return }
-        let entity = entities[Int(row)]
+        if table.pointee.data.entities == nil { return }
+        let entity = table.pointee.data.entities![Int(row)]
 
         var cur = flecs_component_first_next(cr)
-        while let c = cur {
-            if flecs_component_sparse_has(c, entity) {
-                flecs_component_sparse_remove(world, c, table, row)
+        while cur != nil {
+            if flecs_component_sparse_has(cur!, entity) {
+                flecs_component_sparse_remove(world, cur!, table, row)
             }
-            cur = flecs_component_first_next(c)
+            cur = flecs_component_first_next(cur!)
         }
         return
     }
@@ -210,20 +221,22 @@ private func flecs_component_sparse_dont_fragment_pair_remove(
     _ cr: UnsafeMutablePointer<ecs_component_record_t>,
     _ entity: ecs_entity_t)
 {
-    guard let parent = cr.pointee.pair?.pointee.parent else { return }
-    guard parent.pointee.sparse != nil else { return }
+    let parent = cr.pointee.pair?.pointee.parent
+    if parent == nil { return }
+    if parent!.pointee.sparse == nil { return }
 
-    guard let type = flecs_sparse_get(
-        parent.pointee.sparse!,
+    let type = flecs_sparse_get(
+        parent!.pointee.sparse!,
         Int32(MemoryLayout<ecs_type_t>.stride), entity)?
-        .bindMemory(to: ecs_type_t.self, capacity: 1) else {
+        .bindMemory(to: ecs_type_t.self, capacity: 1)
+    if type == nil {
         return
     }
 
-    flecs_type_remove_ignoring_generation(world, type, ECS_PAIR_SECOND(cr.pointee.id))
+    flecs_type_remove_ignoring_generation(world, type!, ECS_PAIR_SECOND(cr.pointee.id))
 
-    if type.pointee.count == 0 {
-        flecs_sparse_remove(parent.pointee.sparse!, 0, entity)
+    if type!.pointee.count == 0 {
+        flecs_sparse_remove(parent!.pointee.sparse!, 0, entity)
     }
 }
 
@@ -232,22 +245,23 @@ private func flecs_component_sparse_dont_fragment_exclusive_remove(
     _ cr: UnsafeMutablePointer<ecs_component_record_t>,
     _ entity: ecs_entity_t)
 {
-    guard let parent = cr.pointee.pair?.pointee.parent else { return }
-    guard parent.pointee.sparse != nil else { return }
+    let parent = cr.pointee.pair?.pointee.parent
+    if parent == nil { return }
+    if parent!.pointee.sparse == nil { return }
 
     flecs_sparse_remove(
-        parent.pointee.sparse!,
+        parent!.pointee.sparse!,
         Int32(MemoryLayout<ecs_entity_t>.stride), entity)
 }
 
-// MARK: - Sparse Remove All
 
 /// Remove all instances of a sparse component (used during component deletion).
 public func flecs_component_sparse_remove_all(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ cr: UnsafeMutablePointer<ecs_component_record_t>)
 {
-    guard let sparse = cr.pointee.sparse else { return }
+    if cr.pointee.sparse == nil { return }
+    let sparse = cr.pointee.sparse!
 
     if ecs_id_is_wildcard(cr.pointee.id) {
         // For wildcard: free type arrays stored in sparse set
@@ -256,11 +270,11 @@ public func flecs_component_sparse_remove_all(
 
         let count = flecs_sparse_count(sparse)
         for i in 0..<Int(count) {
-            if let type = flecs_sparse_get_dense(
+            let type = flecs_sparse_get_dense(
                 sparse, Int32(MemoryLayout<ecs_type_t>.stride), Int32(i))?
                 .bindMemory(to: ecs_type_t.self, capacity: 1)
-            {
-                flecs_type_free(world, type)
+            if type != nil {
+                flecs_type_free(world, type!)
             }
         }
     } else {
@@ -269,22 +283,24 @@ public func flecs_component_sparse_remove_all(
         let count = flecs_sparse_count(sparse)
         let ti = cr.pointee.type_info
 
-        if let ti = ti {
-            if let on_remove = ti.pointee.hooks.on_remove {
+        if ti != nil {
+            if ti!.pointee.hooks.on_remove != nil {
                 for i in 0..<Int(count) {
                     let e = entities![Int(i)]
-                    guard let r = flecs_entities_get(UnsafePointer(world), e) else { continue }
+                    let r = flecs_entities_get(UnsafePointer(world), e)
+                    if r == nil { continue }
                     var e_mut = e
-                    flecs_invoke_hook(world, r.pointee.table, cr, nil, 1,
-                        ECS_RECORD_TO_ROW(r.pointee.row), &e_mut,
-                        cr.pointee.id, UnsafePointer(ti), EcsOnRemove, on_remove)
+                    flecs_invoke_hook(world, r!.pointee.table, cr, nil, 1,
+                        ECS_RECORD_TO_ROW(r!.pointee.row), &e_mut,
+                        cr.pointee.id, UnsafePointer(ti!), EcsOnRemove, ti!.pointee.hooks.on_remove!)
                 }
             }
 
-            if ti.pointee.hooks.dtor != nil {
+            if ti!.pointee.hooks.dtor != nil {
                 for i in 0..<Int(count) {
-                    if let ptr = flecs_sparse_get_dense(sparse, 0, Int32(i)) {
-                        flecs_type_info_dtor(ptr, 1, UnsafePointer(ti))
+                    let ptr = flecs_sparse_get_dense(sparse, 0, Int32(i))
+                    if ptr != nil {
+                        flecs_type_info_dtor(ptr!, 1, UnsafePointer(ti!))
                     }
                 }
             }
@@ -307,7 +323,6 @@ public func flecs_component_sparse_remove_all(
     }
 }
 
-// MARK: - Sparse Insert
 
 /// Insert a new sparse component for an entity, invoking hooks.
 public func flecs_component_sparse_insert(
@@ -316,12 +331,13 @@ public func flecs_component_sparse_insert(
     _ table: UnsafeMutablePointer<ecs_table_t>,
     _ row: Int32) -> UnsafeMutableRawPointer?
 {
-    guard let entities = table.pointee.data.entities else { return nil }
-    let entity = entities[Int(row)]
+    if table.pointee.data.entities == nil { return nil }
+    let entity = table.pointee.data.entities![Int(row)]
 
     var is_new = true
-    guard let ptr = flecs_sparse_ensure(
-        cr.pointee.sparse, 0, entity, &is_new) else {
+    let ptr = flecs_sparse_ensure(
+        cr.pointee.sparse, 0, entity, &is_new)
+    if ptr == nil {
         return nil
     }
 
@@ -342,20 +358,21 @@ public func flecs_component_sparse_insert(
 
     if !is_new { return ptr }
 
-    guard let ti = cr.pointee.type_info else { return ptr }
+    if cr.pointee.type_info == nil { return ptr }
+    let ti = cr.pointee.type_info!
 
     // Override from base if table has IsA
-    flecs_component_sparse_override(world, table, component_id, ptr, UnsafePointer(ti))
+    flecs_component_sparse_override(world, table, component_id, ptr!, UnsafePointer(ti))
 
     // Invoke on_add hook
-    if let on_add = ti.pointee.hooks.on_add {
+    if ti.pointee.hooks.on_add != nil {
         var entity_mut = entity
         let tr: UnsafePointer<ecs_table_record_t>? =
             (cr.pointee.flags & EcsIdDontFragment) == 0
             ? flecs_component_get_table(UnsafePointer(cr), UnsafePointer(table))
             : nil
         flecs_invoke_hook(world, table, cr, tr, 1, row, &entity_mut,
-            component_id, UnsafePointer(ti), EcsOnAdd, on_add)
+            component_id, UnsafePointer(ti), EcsOnAdd, ti.pointee.hooks.on_add!)
     }
 
     return ptr
@@ -367,16 +384,18 @@ private func flecs_component_sparse_dont_fragment_pair_insert(
     _ cr: UnsafeMutablePointer<ecs_component_record_t>,
     _ entity: ecs_entity_t)
 {
-    guard let parent = cr.pointee.pair?.pointee.parent else { return }
-    guard parent.pointee.sparse != nil else { return }
+    let parent = cr.pointee.pair?.pointee.parent
+    if parent == nil { return }
+    if parent!.pointee.sparse == nil { return }
 
-    guard let type = flecs_sparse_ensure(
-        parent.pointee.sparse!,
+    let type = flecs_sparse_ensure(
+        parent!.pointee.sparse!,
         Int32(MemoryLayout<ecs_type_t>.stride), entity, nil)?
-        .bindMemory(to: ecs_type_t.self, capacity: 1) else {
+        .bindMemory(to: ecs_type_t.self, capacity: 1)
+    if type == nil {
         return
     }
-    flecs_type_add(world, type, ecs_pair_second(UnsafePointer(world), cr.pointee.id))
+    flecs_type_add(world, type!, ecs_pair_second(UnsafePointer(world), cr.pointee.id))
 }
 
 /// Insert exclusive non-fragmenting pair.
@@ -387,31 +406,33 @@ private func flecs_component_sparse_dont_fragment_exclusive_insert(
     _ row: Int32,
     _ entity: ecs_entity_t)
 {
-    guard let parent = cr.pointee.pair?.pointee.parent else { return }
-    guard parent.pointee.sparse != nil else { return }
+    let parent = cr.pointee.pair?.pointee.parent
+    if parent == nil { return }
+    if parent!.pointee.sparse == nil { return }
 
     let component_id = cr.pointee.id
-    guard let tgt_ptr = flecs_sparse_ensure(
-        parent.pointee.sparse!,
+    let tgt_ptr = flecs_sparse_ensure(
+        parent!.pointee.sparse!,
         Int32(MemoryLayout<ecs_entity_t>.stride), entity, nil)?
-        .bindMemory(to: ecs_entity_t.self, capacity: 1) else {
+        .bindMemory(to: ecs_entity_t.self, capacity: 1)
+    if tgt_ptr == nil {
         return
     }
 
-    let old_tgt = tgt_ptr.pointee
+    let old_tgt = tgt_ptr!.pointee
     if old_tgt != 0 {
         // Exclusive: remove old target first
-        if let other = flecs_components_get(
+        let other = flecs_components_get(
             UnsafePointer(world),
             ecs_pair(ECS_PAIR_FIRST(component_id), old_tgt))
-        {
-            if other != cr {
-                _ = flecs_component_sparse_remove_intern(world, other, table, row)
+        if other != nil {
+            if other! != cr {
+                _ = flecs_component_sparse_remove_intern(world, other!, table, row)
             }
         }
     }
 
-    tgt_ptr.pointee = flecs_entities_get_alive(world, ECS_PAIR_SECOND(component_id))
+    tgt_ptr!.pointee = flecs_entities_get_alive(world, ECS_PAIR_SECOND(component_id))
 }
 
 /// Override a sparse component value from a base entity (IsA).
@@ -444,7 +465,6 @@ private func flecs_component_sparse_override(
     }
 }
 
-// MARK: - Sparse Emplace
 
 /// Emplace (insert without construction) a sparse component.
 public func flecs_component_sparse_emplace(
@@ -453,60 +473,66 @@ public func flecs_component_sparse_emplace(
     _ table: UnsafeMutablePointer<ecs_table_t>,
     _ row: Int32) -> UnsafeMutableRawPointer?
 {
-    guard let entities = table.pointee.data.entities else { return nil }
-    let entity = entities[Int(row)]
+    if table.pointee.data.entities == nil { return nil }
+    let entity = table.pointee.data.entities![Int(row)]
 
-    guard let ptr = flecs_sparse_ensure(cr.pointee.sparse, 0, entity, nil) else {
+    let ptr = flecs_sparse_ensure(cr.pointee.sparse, 0, entity, nil)
+    if ptr == nil {
         return nil
     }
 
-    guard let ti = cr.pointee.type_info else { return ptr }
+    if cr.pointee.type_info == nil { return ptr }
+    let ti = cr.pointee.type_info!
 
-    if let on_add = ti.pointee.hooks.on_add {
+    if ti.pointee.hooks.on_add != nil {
         var entity_mut = entity
         let tr: UnsafePointer<ecs_table_record_t>? =
             (cr.pointee.flags & EcsIdDontFragment) == 0
             ? flecs_component_get_table(UnsafePointer(cr), UnsafePointer(table))
             : nil
         flecs_invoke_hook(world, table, cr, tr, 1, row, &entity_mut,
-            cr.pointee.id, UnsafePointer(ti), EcsOnAdd, on_add)
+            cr.pointee.id, UnsafePointer(ti), EcsOnAdd, ti.pointee.hooks.on_add!)
     }
 
     return ptr
 }
 
-// MARK: - Sparse Delete (bulk)
 
 /// Delete all sparse entries for a component record (used during cr cleanup).
 public func flecs_component_delete_sparse(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ cr: UnsafeMutablePointer<ecs_component_record_t>)
 {
-    guard let sparse = cr.pointee.sparse else { return }
+    if cr.pointee.sparse == nil { return }
+    let sparse = cr.pointee.sparse!
 
     let count = flecs_sparse_count(sparse)
     if count == 0 { return }
 
-    guard let entities = flecs_sparse_ids(sparse) else { return }
+    let entities = flecs_sparse_ids(sparse)
+    if entities == nil { return }
 
     // Invoke on_remove hooks and destructors
-    if let ti = cr.pointee.type_info {
-        if let on_remove = ti.pointee.hooks.on_remove {
+    if cr.pointee.type_info != nil {
+        let ti = cr.pointee.type_info!
+        if ti.pointee.hooks.on_remove != nil {
             for i in 0..<Int(count) {
-                let e = entities[i]
-                guard let r = flecs_entities_get(UnsafePointer(world), e) else { continue }
-                guard let table = r.pointee.table else { continue }
+                let e = entities![i]
+                let r = flecs_entities_get(UnsafePointer(world), e)
+                if r == nil { continue }
+                if r!.pointee.table == nil { continue }
                 var e_mut = e
-                flecs_invoke_hook(world, table, cr, nil, 1,
-                    ECS_RECORD_TO_ROW(r.pointee.row), &e_mut,
-                    cr.pointee.id, UnsafePointer(ti), EcsOnRemove, on_remove)
+                flecs_invoke_hook(world, r!.pointee.table, cr, nil, 1,
+                    ECS_RECORD_TO_ROW(r!.pointee.row), &e_mut,
+                    cr.pointee.id, UnsafePointer(ti), EcsOnRemove, ti.pointee.hooks.on_remove!)
             }
         }
 
         if ti.pointee.hooks.dtor != nil {
             for i in 0..<Int(count) {
-                if let ptr = flecs_sparse_get_dense(sparse, 0, Int32(i)) {
-                    flecs_type_info_dtor(ptr, 1, UnsafePointer(ti))
+                let ptr = flecs_sparse_get_dense(sparse, 0, Int32(i))
+                if ptr != nil {
+                    flecs_type_info_dtor(ptr!, 1, UnsafePointer(ti))
                 }
             }
         }

@@ -1,9 +1,14 @@
 // ComponentActions.swift - 1:1 translation of flecs component_actions.c
 // Logic executed after adding/removing a component: hooks, observers, sparse storage
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Hook Invocation
 
 /// Invoke a component lifecycle hook (on_add, on_remove, on_set).
 public func flecs_invoke_hook(
@@ -21,10 +26,10 @@ public func flecs_invoke_hook(
 {
     // Save and restore defer state
     var defer_val: Int32 = 0
-    if let stages = world.pointee.stages, let stage0 = stages.pointee {
-        defer_val = stage0.pointee.defer
+    if world.pointee.stages != nil && world.pointee.stages!.pointee != nil {
+        defer_val = world.pointee.stages!.pointee!.pointee.defer
         if defer_val < 0 {
-            stage0.pointee.defer *= -1
+            world.pointee.stages!.pointee!.pointee.defer *= -1
         }
     }
 
@@ -65,12 +70,11 @@ public func flecs_invoke_hook(
     hook(withUnsafeMutablePointer(to: &it) { $0 })
 
     // Restore defer state
-    if let stages = world.pointee.stages, let stage0 = stages.pointee {
-        stage0.pointee.defer = defer_val
+    if world.pointee.stages != nil && world.pointee.stages!.pointee != nil {
+        world.pointee.stages!.pointee!.pointee.defer = defer_val
     }
 }
 
-// MARK: - Action Dispatch
 
 /// Execute on-add actions for new entities.
 public func flecs_actions_new(
@@ -139,7 +143,6 @@ public func flecs_actions_move_remove(
     // flecs_actions_on_remove_intern_w_reparent in full implementation
 }
 
-// MARK: - On-Set Notifications
 
 /// Notify on-set hooks and observers for a set of ids.
 public func flecs_notify_on_set_ids(
@@ -169,7 +172,6 @@ public func flecs_notify_on_set(
     // and call flecs_emit in full implementation
 }
 
-// MARK: - Sparse Storage Actions
 
 /// Handle adding a sparse component to an entity.
 public func flecs_sparse_on_add_cr(
@@ -180,7 +182,7 @@ public func flecs_sparse_on_add_cr(
     _ construct: Bool,
     _ ptr_out: UnsafeMutablePointer<UnsafeMutableRawPointer?>?) -> Bool
 {
-    guard let cr = cr, (cr.pointee.flags & EcsIdSparse) != 0 else {
+    if cr == nil || (cr!.pointee.flags & EcsIdSparse) == 0 {
         return false
     }
 
@@ -200,13 +202,13 @@ public func flecs_entity_remove_non_fragmenting(
         return
     }
 
-    guard let r = record else { return }
-    if (r.pointee.row & EcsEntityHasDontFragment) == 0 {
+    if record == nil { return }
+    if (record!.pointee.row & EcsEntityHasDontFragment) == 0 {
         return
     }
 
     // Would iterate world->cr_non_fragmenting_head chain and remove
     // sparse components in full implementation
 
-    r.pointee.row &= ~EcsEntityHasDontFragment
+    record!.pointee.row &= ~EcsEntityHasDontFragment
 }

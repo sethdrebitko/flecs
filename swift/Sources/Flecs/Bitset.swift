@@ -1,9 +1,14 @@
 // Bitset.swift - 1:1 translation of flecs bitset.c
 // Simple bitset implementation for compact boolean storage
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Bitset Type
 
 public struct ecs_bitset_t {
     public var data: UnsafeMutablePointer<UInt64>?
@@ -17,7 +22,6 @@ public struct ecs_bitset_t {
     }
 }
 
-// MARK: - Internal
 
 private func flecs_bitset_ensure_size(
     _ bs: UnsafeMutablePointer<ecs_bitset_t>,
@@ -38,7 +42,6 @@ private func flecs_bitset_ensure_size(
     }
 }
 
-// MARK: - Public API
 
 public func flecs_bitset_init(
     _ bs: UnsafeMutablePointer<ecs_bitset_t>)

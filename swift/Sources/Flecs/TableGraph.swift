@@ -1,13 +1,19 @@
 // TableGraph.swift - 1:1 translation of flecs storage/table_graph.c
 // Table graph edges for fast add/remove table transitions
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Type Utilities
 
 /// Hash a type (sorted id array) for table lookup.
 public func flecs_type_hash(_ type: UnsafePointer<ecs_type_t>) -> UInt64 {
-    guard let ids = type.pointee.array else { return 0 }
+    if type.pointee.array == nil { return 0 }
+    let ids = type.pointee.array!
     let count = type.pointee.count
     return flecs_hash(ids, Int32(count) * Int32(MemoryLayout<ecs_id_t>.stride))
 }
@@ -24,8 +30,9 @@ public func flecs_type_compare(
         return count_1 > count_2 ? 1 : -1
     }
 
-    guard let ids_1 = type_1.pointee.array,
-          let ids_2 = type_2.pointee.array else { return 0 }
+    if type_1.pointee.array == nil || type_2.pointee.array == nil { return 0 }
+    let ids_1 = type_1.pointee.array!
+    let ids_2 = type_2.pointee.array!
 
     for i in 0..<Int(count_1) {
         let id_1 = ids_1[i]
@@ -46,7 +53,6 @@ public func flecs_table_hashmap_init(
     flecs_hashmap_init(hm, &world.pointee.allocator)
 }
 
-// MARK: - Type Insertion/Removal
 
 /// Find the insertion point for an id in a sorted type.
 /// Returns -1 if the id already exists.
@@ -55,7 +61,8 @@ private func flecs_type_find_insert(
     _ offset: Int32,
     _ to_add: ecs_id_t) -> Int32
 {
-    guard let array = type.pointee.array else { return 0 }
+    if type.pointee.array == nil { return 0 }
+    let array = type.pointee.array!
     let count = type.pointee.count
 
     for i in Int(offset)..<Int(count) {
@@ -71,7 +78,8 @@ private func flecs_type_find(
     _ type: UnsafePointer<ecs_type_t>,
     _ id: ecs_id_t) -> Int32
 {
-    guard let array = type.pointee.array else { return -1 }
+    if type.pointee.array == nil { return -1 }
+    let array = type.pointee.array!
     let count = type.pointee.count
 
     for i in 0..<Int(count) {
@@ -92,7 +100,7 @@ public func flecs_type_copy(
         return ecs_type_t()
     }
 
-    let ids = UnsafeMutablePointer<ecs_id_t>.allocate(capacity: Int(src_count))
+    let ids = ecs_os_calloc_n(ecs_id_t.self, src_count)!
     ids.update(from: src.pointee.array!, count: Int(src_count))
     return ecs_type_t(array: ids, count: src_count)
 }
@@ -102,8 +110,8 @@ public func flecs_type_free(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ type: UnsafeMutablePointer<ecs_type_t>)
 {
-    if type.pointee.count > 0, let array = type.pointee.array {
-        array.deallocate()
+    if type.pointee.count > 0 && type.pointee.array != nil {
+        ecs_os_free(UnsafeMutableRawPointer(type.pointee.array!))
         type.pointee.array = nil
         type.pointee.count = 0
     }
@@ -121,17 +129,17 @@ public func flecs_type_new_with(
     if at == -1 { return -1 }
 
     let dst_count = src.pointee.count + 1
-    let dst_array = UnsafeMutablePointer<ecs_id_t>.allocate(capacity: Int(dst_count))
+    let dst_array = ecs_os_calloc_n(ecs_id_t.self, dst_count)!
     dst.pointee.count = dst_count
     dst.pointee.array = dst_array
 
-    if at > 0, let src_array = src.pointee.array {
-        dst_array.update(from: src_array, count: Int(at))
+    if at > 0 && src.pointee.array != nil {
+        dst_array.update(from: src.pointee.array!, count: Int(at))
     }
 
     let remain = src.pointee.count - at
-    if remain > 0, let src_array = src.pointee.array {
-        (dst_array + Int(at) + 1).update(from: src_array + Int(at), count: Int(remain))
+    if remain > 0 && src.pointee.array != nil {
+        (dst_array + Int(at) + 1).update(from: src.pointee.array! + Int(at), count: Int(remain))
     }
 
     dst_array[Int(at)] = with
@@ -159,7 +167,8 @@ public func flecs_type_new_without(
     var count: Int32 = 1
     if ecs_id_is_wildcard(without) {
         // Count additional wildcard matches
-        guard let array = src.pointee.array else { return -1 }
+        if src.pointee.array == nil { return -1 }
+        let array = src.pointee.array!
         var i = at + 1
         while i < src_count {
             if ecs_id_match(array[Int(i)], without) { count += 1 }
@@ -175,11 +184,12 @@ public func flecs_type_new_without(
         return 0
     }
 
-    let dst_array = UnsafeMutablePointer<ecs_id_t>.allocate(capacity: Int(dst_count))
+    let dst_array = ecs_os_calloc_n(ecs_id_t.self, dst_count)!
     dst.pointee.array = dst_array
     dst.pointee.count = dst_count
 
-    guard let src_array = src.pointee.array else { return -1 }
+    if src.pointee.array == nil { return -1 }
+    let src_array = src.pointee.array!
     if at > 0 {
         dst_array.update(from: src_array, count: Int(at))
     }
@@ -207,7 +217,6 @@ public func flecs_type_add(
     }
 }
 
-// MARK: - Table Diff Builder
 
 /// Initialize a table diff builder with pre-allocated vectors.
 public func flecs_table_diff_builder_init(
@@ -263,21 +272,23 @@ public func flecs_table_diff_build_append_table(
     _ src: UnsafePointer<ecs_table_diff_t>)
 {
     let elem_size = Int32(MemoryLayout<ecs_id_t>.stride)
-    if src.pointee.added.count > 0, let added = src.pointee.added.array {
+    if src.pointee.added.count > 0 && src.pointee.added.array != nil {
         let offset = dst.pointee.added.count
         ecs_vec_grow(&world.pointee.allocator, &dst.pointee.added,
                      elem_size, src.pointee.added.count)
-        if let dest = ecs_vec_get(&dst.pointee.added, elem_size, offset) {
-            dest.copyMemory(from: added,
+        let dest = ecs_vec_get(&dst.pointee.added, elem_size, offset)
+        if dest != nil {
+            dest!.copyMemory(from: src.pointee.added.array!,
                            byteCount: Int(src.pointee.added.count) * MemoryLayout<ecs_id_t>.stride)
         }
     }
-    if src.pointee.removed.count > 0, let removed = src.pointee.removed.array {
+    if src.pointee.removed.count > 0 && src.pointee.removed.array != nil {
         let offset = dst.pointee.removed.count
         ecs_vec_grow(&world.pointee.allocator, &dst.pointee.removed,
                      elem_size, src.pointee.removed.count)
-        if let dest = ecs_vec_get(&dst.pointee.removed, elem_size, offset) {
-            dest.copyMemory(from: removed,
+        let dest = ecs_vec_get(&dst.pointee.removed, elem_size, offset)
+        if dest != nil {
+            dest!.copyMemory(from: src.pointee.removed.array!,
                            byteCount: Int(src.pointee.removed.count) * MemoryLayout<ecs_id_t>.stride)
         }
     }
@@ -285,7 +296,6 @@ public func flecs_table_diff_build_append_table(
     dst.pointee.removed_flags |= src.pointee.removed_flags
 }
 
-// MARK: - Graph Edge Management
 
 /// Initialize graph edges for a table node.
 public func flecs_table_init_node(
@@ -306,8 +316,7 @@ public func flecs_table_ensure_edge(
     if id < FLECS_HI_COMPONENT_ID {
         if edges.pointee.lo == nil {
             let count = Int(FLECS_HI_COMPONENT_ID)
-            edges.pointee.lo = UnsafeMutablePointer<ecs_graph_edge_t>.allocate(capacity: count)
-            edges.pointee.lo!.initialize(repeating: ecs_graph_edge_t(), count: count)
+            edges.pointee.lo = ecs_os_calloc_n(ecs_graph_edge_t.self, Int32(count))!
         }
         return edges.pointee.lo! + Int(id)
     } else {
@@ -322,24 +331,23 @@ private func flecs_table_ensure_hi_edge(
     _ id: ecs_id_t) -> UnsafeMutablePointer<ecs_graph_edge_t>
 {
     if edges.pointee.hi == nil {
-        edges.pointee.hi = UnsafeMutablePointer<ecs_map_t>.allocate(capacity: 1)
-        edges.pointee.hi!.initialize(to: ecs_map_t())
+        edges.pointee.hi = ecs_os_calloc_t(ecs_map_t.self)!
         ecs_map_init(edges.pointee.hi!, &world.pointee.allocator)
     }
 
-    if let val = ecs_map_get(edges.pointee.hi!, id) {
-        if val.pointee != 0 {
+    let val_check = ecs_map_get(edges.pointee.hi!, id)
+    if val_check != nil {
+        if val_check!.pointee != 0 {
             return UnsafeMutablePointer<ecs_graph_edge_t>(
-                bitPattern: UInt(val.pointee))!
+                bitPattern: UInt(val_check!.pointee))!
         }
     }
 
     let edge: UnsafeMutablePointer<ecs_graph_edge_t>
-    if id < FLECS_HI_COMPONENT_ID, let lo = edges.pointee.lo {
-        edge = lo + Int(id)
+    if id < FLECS_HI_COMPONENT_ID && edges.pointee.lo != nil {
+        edge = edges.pointee.lo! + Int(id)
     } else {
-        edge = UnsafeMutablePointer<ecs_graph_edge_t>.allocate(capacity: 1)
-        edge.initialize(to: ecs_graph_edge_t())
+        edge = ecs_os_calloc_t(ecs_graph_edge_t.self)!
     }
 
     let val = ecs_map_ensure(edges.pointee.hi!, id)
@@ -347,7 +355,6 @@ private func flecs_table_ensure_hi_edge(
     return edge
 }
 
-// MARK: - Table Traversal
 
 /// Traverse the table graph to find the table with an added id.
 public func flecs_table_traverse_add(
@@ -361,17 +368,17 @@ public func flecs_table_traverse_add(
 
     let edge = flecs_table_ensure_edge(world, &node.pointee.node.add, id)
 
-    if let to = edge.pointee.to {
-        if UnsafeMutableRawPointer(node) != UnsafeMutableRawPointer(to) || edge.pointee.diff != nil {
-            if let d = edge.pointee.diff {
-                diff.pointee = d.pointee
+    if edge.pointee.to != nil {
+        if UnsafeMutableRawPointer(node) != UnsafeMutableRawPointer(edge.pointee.to!) || edge.pointee.diff != nil {
+            if edge.pointee.diff != nil {
+                diff.pointee = edge.pointee.diff!.pointee
             } else {
                 diff.pointee.added.array = id_ptr
                 diff.pointee.added.count = 1
                 diff.pointee.removed.count = 0
             }
         }
-        return to
+        return edge.pointee.to!
     }
 
     // Create the edge by finding/creating the target table
@@ -401,17 +408,17 @@ public func flecs_table_traverse_remove(
 
     let edge = flecs_table_ensure_edge(world, &node.pointee.node.remove, id)
 
-    if let to = edge.pointee.to {
-        if UnsafeMutableRawPointer(node) != UnsafeMutableRawPointer(to) || edge.pointee.diff != nil {
-            if let d = edge.pointee.diff {
-                diff.pointee = d.pointee
+    if edge.pointee.to != nil {
+        if UnsafeMutableRawPointer(node) != UnsafeMutableRawPointer(edge.pointee.to!) || edge.pointee.diff != nil {
+            if edge.pointee.diff != nil {
+                diff.pointee = edge.pointee.diff!.pointee
             } else {
                 diff.pointee.added.count = 0
                 diff.pointee.removed.array = id_ptr
                 diff.pointee.removed.count = 1
             }
         }
-        return to
+        return edge.pointee.to!
     }
 
     let to = flecs_find_table_without(world, node, id)
@@ -428,7 +435,6 @@ public func flecs_table_traverse_remove(
     return to
 }
 
-// MARK: - Table Find/Create
 
 /// Find an existing table with the given type, or create a new one.
 private func flecs_find_table_with(
@@ -437,8 +443,9 @@ private func flecs_find_table_with(
     _ with: ecs_id_t) -> UnsafeMutablePointer<ecs_table_t>
 {
     // Check if component is non-fragmenting
-    if let cr = flecs_components_get(UnsafePointer(world), with) {
-        if (cr.pointee.flags & EcsIdDontFragment) != 0 {
+    let cr = flecs_components_get(UnsafePointer(world), with)
+    if cr != nil {
+        if (cr!.pointee.flags & EcsIdDontFragment) != 0 {
             node.pointee.flags |= EcsTableHasDontFragment
             return node
         }
@@ -465,8 +472,9 @@ private func flecs_find_table_without(
     _ node: UnsafeMutablePointer<ecs_table_t>,
     _ without: ecs_id_t) -> UnsafeMutablePointer<ecs_table_t>
 {
-    if let cr = flecs_components_get(UnsafePointer(world), without) {
-        if (cr.pointee.flags & EcsIdDontFragment) != 0 {
+    let cr = flecs_components_get(UnsafePointer(world), without)
+    if cr != nil {
+        if (cr!.pointee.flags & EcsIdDontFragment) != 0 {
             node.pointee.flags |= EcsTableHasDontFragment
             return node
         }
@@ -494,13 +502,13 @@ private func flecs_table_ensure(
 
     // Look up in table map
     let elem = flecs_hashmap_ensure(&world.pointee.store.table_map, type)
-    if let existing = elem.value?.assumingMemoryBound(
+    let existing = elem.value?.assumingMemoryBound(
         to: UnsafeMutablePointer<ecs_table_t>?.self).pointee
-    {
+    if existing != nil {
         if own_type {
             flecs_type_free(world, type)
         }
-        return existing
+        return existing!
     }
 
     // Create new table
@@ -508,8 +516,7 @@ private func flecs_table_ensure(
         Int32(MemoryLayout<ecs_table_t>.stride))!
         .bindMemory(to: ecs_table_t.self, capacity: 1)
 
-    table.pointee._ = UnsafeMutablePointer<ecs_table__t>.allocate(capacity: 1)
-    table.pointee._.initialize(to: ecs_table__t())
+    table.pointee._ = ecs_os_calloc_t(ecs_table__t.self)!
     table.pointee.id = flecs_sparse_last_id(&world.pointee.store.tables)
 
     if own_type {
@@ -519,8 +526,8 @@ private func flecs_table_ensure(
     }
 
     // Store in hashmap
-    if let val = elem.value {
-        val.assumingMemoryBound(
+    if elem.value != nil {
+        elem.value!.assumingMemoryBound(
             to: UnsafeMutablePointer<ecs_table_t>?.self).pointee = table
     }
 
@@ -546,8 +553,7 @@ public func flecs_init_root_table(
     _ world: UnsafeMutablePointer<ecs_world_t>)
 {
     world.pointee.store.root.type = ecs_type_t()
-    world.pointee.store.root._ = UnsafeMutablePointer<ecs_table__t>.allocate(capacity: 1)
-    world.pointee.store.root._.initialize(to: ecs_table__t())
+    world.pointee.store.root._ = ecs_os_calloc_t(ecs_table__t.self)!
     flecs_table_init_node(&world.pointee.store.root.node)
     flecs_table_init(world, &world.pointee.store.root, nil)
 
@@ -555,7 +561,6 @@ public func flecs_init_root_table(
     _ = new_id  // Should be 0, reserved for root
 }
 
-// MARK: - Public Table API
 
 /// Add an id to a table, returning the resulting table.
 public func ecs_table_add_id(
@@ -593,7 +598,6 @@ public func ecs_table_find(
     return flecs_table_ensure(world, &type, false, nil)
 }
 
-// MARK: - Edge Cleanup
 
 /// Clear all graph edges for a table (used during table deletion).
 public func flecs_table_clear_edges(
@@ -603,21 +607,21 @@ public func flecs_table_clear_edges(
     let node = withUnsafeMutablePointer(to: &table.pointee.node) { $0 }
 
     // Clean up hi maps
-    if let add_hi = node.pointee.add.hi {
-        ecs_map_fini(add_hi)
-        add_hi.deallocate()
+    if node.pointee.add.hi != nil {
+        ecs_map_fini(node.pointee.add.hi!)
+        ecs_os_free(UnsafeMutableRawPointer(node.pointee.add.hi!))
     }
-    if let remove_hi = node.pointee.remove.hi {
-        ecs_map_fini(remove_hi)
-        remove_hi.deallocate()
+    if node.pointee.remove.hi != nil {
+        ecs_map_fini(node.pointee.remove.hi!)
+        ecs_os_free(UnsafeMutableRawPointer(node.pointee.remove.hi!))
     }
 
     // Clean up lo arrays
-    if let add_lo = node.pointee.add.lo {
-        add_lo.deallocate()
+    if node.pointee.add.lo != nil {
+        ecs_os_free(UnsafeMutableRawPointer(node.pointee.add.lo!))
     }
-    if let remove_lo = node.pointee.remove.lo {
-        remove_lo.deallocate()
+    if node.pointee.remove.lo != nil {
+        ecs_os_free(UnsafeMutableRawPointer(node.pointee.remove.lo!))
     }
 
     node.pointee.add.lo = nil
