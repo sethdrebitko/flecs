@@ -1,14 +1,18 @@
 // EntityIndex.swift - 1:1 translation of flecs entity_index.h/c
 // Stores the table and row for entity IDs with paged lookup
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Constants
 
 public let FLECS_ENTITY_PAGE_SIZE: Int32 = 1 << FLECS_ENTITY_PAGE_BITS // 1024
 public let FLECS_ENTITY_PAGE_MASK: Int32 = FLECS_ENTITY_PAGE_SIZE - 1
 
-// MARK: - Types
 
 public struct ecs_entity_index_page_t {
     // Array of records, one per slot in the page
@@ -17,21 +21,17 @@ public struct ecs_entity_index_page_t {
     public init() {}
 
     public static func allocate() -> UnsafeMutablePointer<ecs_entity_index_page_t> {
-        let page = UnsafeMutablePointer<ecs_entity_index_page_t>.allocate(capacity: 1)
+        let page = ecs_os_calloc_t(ecs_entity_index_page_t.self)!
         page.pointee = ecs_entity_index_page_t()
-        let recordSize = MemoryLayout<ecs_record_t>.stride * Int(FLECS_ENTITY_PAGE_SIZE)
-        page.pointee.records = UnsafeMutablePointer<ecs_record_t>.allocate(capacity: Int(FLECS_ENTITY_PAGE_SIZE))
-        // Zero-initialize all records
-        page.pointee.records!.initialize(repeating: ecs_record_t(), count: Int(FLECS_ENTITY_PAGE_SIZE))
+        page.pointee.records = ecs_os_calloc_n(ecs_record_t.self, FLECS_ENTITY_PAGE_SIZE)!
         return page
     }
 
     public static func deallocate(_ page: UnsafeMutablePointer<ecs_entity_index_page_t>) {
-        if let records = page.pointee.records {
-            records.deinitialize(count: Int(FLECS_ENTITY_PAGE_SIZE))
-            records.deallocate()
+        if page.pointee.records != nil {
+            ecs_os_free(UnsafeMutableRawPointer(page.pointee.records))
         }
-        page.deallocate()
+        ecs_os_free(UnsafeMutableRawPointer(page))
     }
 }
 
@@ -44,7 +44,6 @@ public struct ecs_entity_index_t {
     public init() {}
 }
 
-// MARK: - Internal Helpers
 
 private func flecs_entity_index_ensure_page(
     _ index: UnsafeMutablePointer<ecs_entity_index_t>,
@@ -68,7 +67,6 @@ private func flecs_entity_index_ensure_page(
     return page_ptr.pointee!
 }
 
-// MARK: - Public API
 
 public func flecs_entity_index_init(
     _ allocator: UnsafeMutablePointer<ecs_allocator_t>?,
@@ -98,8 +96,8 @@ public func flecs_entity_index_fini(
         let pages = ecs_vec_first(&index.pointee.pages)!
             .assumingMemoryBound(to: UnsafeMutablePointer<ecs_entity_index_page_t>?.self)
         for i in 0..<Int(count) {
-            if let page = pages[i] {
-                ecs_entity_index_page_t.deallocate(page)
+            if pages[i] != nil {
+                ecs_entity_index_page_t.deallocate(pages[i]!)
             }
         }
     }
@@ -118,12 +116,12 @@ public func flecs_entity_index_get_any(
     var pagesVec = index.pointee.pages
     let page_ptr = ecs_vec_get(&pagesVec, ptrSize, page_index)!
         .assumingMemoryBound(to: UnsafeMutablePointer<ecs_entity_index_page_t>?.self)
-    guard let page = page_ptr.pointee else { return nil }
+    if page_ptr.pointee == nil { return nil }
 
     let offset = Int(id & UInt32(FLECS_ENTITY_PAGE_MASK))
-    let r = page.pointee.records!.advanced(by: offset)
+    let r = page_ptr.pointee!.pointee.records!.advanced(by: offset)
 
-    guard r.pointee.dense != 0 else { return nil }
+    if r.pointee.dense == 0 { return nil }
     return r
 }
 
@@ -132,9 +130,9 @@ public func flecs_entity_index_get(
     _ entity: UInt64
 ) -> UnsafeMutablePointer<ecs_record_t>? {
     let r = flecs_entity_index_get_any(index, entity)
-    guard let r = r else { return nil }
-    guard r.pointee.dense < index.pointee.alive_count else { return nil }
-    return r
+    if r == nil { return nil }
+    if r!.pointee.dense >= index.pointee.alive_count { return nil }
+    return r!
 }
 
 public func flecs_entity_index_try_get_any(
@@ -152,10 +150,10 @@ public func flecs_entity_index_try_get_any(
     let ptrSize = ecs_size_t(MemoryLayout<UnsafeMutablePointer<ecs_entity_index_page_t>?>.stride)
     let page_ptr = ecs_vec_get(&pagesVec, ptrSize, page_index)!
         .assumingMemoryBound(to: UnsafeMutablePointer<ecs_entity_index_page_t>?.self)
-    guard let page = page_ptr.pointee else { return nil }
+    if page_ptr.pointee == nil { return nil }
 
     let offset = Int(id & UInt32(FLECS_ENTITY_PAGE_MASK))
-    let r = page.pointee.records!.advanced(by: offset)
+    let r = page_ptr.pointee!.pointee.records!.advanced(by: offset)
 
     if r.pointee.dense == 0 { return nil }
     return r
@@ -166,16 +164,16 @@ public func flecs_entity_index_try_get(
     _ entity: UInt64
 ) -> UnsafeMutablePointer<ecs_record_t>? {
     let r = flecs_entity_index_try_get_any(index, entity)
-    guard let r = r else { return nil }
-    if r.pointee.dense >= index.pointee.alive_count { return nil }
+    if r == nil { return nil }
+    if r!.pointee.dense >= index.pointee.alive_count { return nil }
 
     let u64Size = ecs_size_t(MemoryLayout<UInt64>.stride)
     var denseVec = index.pointee.dense
-    let stored = ecs_vec_get(&denseVec, u64Size, r.pointee.dense)!
+    let stored = ecs_vec_get(&denseVec, u64Size, r!.pointee.dense)!
         .assumingMemoryBound(to: UInt64.self).pointee
     if stored != entity { return nil }
 
-    return r
+    return r!
 }
 
 public func flecs_entity_index_ensure(
@@ -209,10 +207,11 @@ public func flecs_entity_index_remove(
     _ index: UnsafeMutablePointer<ecs_entity_index_t>,
     _ entity: UInt64
 ) {
-    guard let r = flecs_entity_index_try_get(
-        UnsafePointer(index), entity) else { return }
+    let r = flecs_entity_index_try_get(
+        UnsafePointer(index), entity)
+    if r == nil { return }
 
-    let dense_index = r.pointee.dense
+    let dense_index = r!.pointee.dense
     let alive_count = index.pointee.alive_count
 
     if dense_index < alive_count {
@@ -231,21 +230,22 @@ public func flecs_entity_index_remove(
         dense_arr[Int(last_alive)] = entity
 
         // Update the record of the swapped entity
-        if let last_r = flecs_entity_index_get_any(
-            UnsafePointer(index), last_entity) {
-            last_r.pointee.dense = dense_index
+        let last_r = flecs_entity_index_get_any(
+            UnsafePointer(index), last_entity)
+        if last_r != nil {
+            last_r!.pointee.dense = dense_index
         }
 
         // Increment generation
         let new_entity = ECS_GENERATION_INC(entity)
         dense_arr[Int(last_alive)] = new_entity
 
-        r.pointee.dense = last_alive
+        r!.pointee.dense = last_alive
     }
 
     // Clear record
-    r.pointee.table = nil
-    r.pointee.row = 0
+    r!.pointee.table = nil
+    r!.pointee.row = 0
 }
 
 public func flecs_entity_index_make_alive(
@@ -270,9 +270,10 @@ public func flecs_entity_index_make_alive(
         dense_arr[Int(alive_count)] = entity
 
         // Update record of swapped entity
-        if let other_r = flecs_entity_index_get_any(
-            UnsafePointer(index), first_not_alive) {
-            other_r.pointee.dense = dense_index
+        let other_r = flecs_entity_index_get_any(
+            UnsafePointer(index), first_not_alive)
+        if other_r != nil {
+            other_r!.pointee.dense = dense_index
         }
 
         r.pointee.dense = alive_count
@@ -312,11 +313,12 @@ public func flecs_entity_index_get_alive(
     _ index: UnsafePointer<ecs_entity_index_t>,
     _ entity: UInt64
 ) -> UInt64 {
-    guard let r = flecs_entity_index_try_get_any(index, entity) else { return 0 }
+    let r = flecs_entity_index_try_get_any(index, entity)
+    if r == nil { return 0 }
 
     let u64Size = ecs_size_t(MemoryLayout<UInt64>.stride)
     var denseVec = index.pointee.dense
-    let stored = ecs_vec_get(&denseVec, u64Size, r.pointee.dense)!
+    let stored = ecs_vec_get(&denseVec, u64Size, r!.pointee.dense)!
         .assumingMemoryBound(to: UInt64.self).pointee
     return stored
 }
@@ -373,8 +375,8 @@ public func flecs_entity_index_clear(
         let pages = ecs_vec_first(&index.pointee.pages)!
             .assumingMemoryBound(to: UnsafeMutablePointer<ecs_entity_index_page_t>?.self)
         for i in 0..<Int(count) {
-            if let page = pages[i] {
-                ecs_entity_index_page_t.deallocate(page)
+            if pages[i] != nil {
+                ecs_entity_index_page_t.deallocate(pages[i]!)
             }
         }
     }
@@ -390,6 +392,7 @@ public func flecs_entity_index_ids(
     _ index: UnsafePointer<ecs_entity_index_t>
 ) -> UnsafePointer<UInt64>? {
     var denseVec = index.pointee.dense
-    guard let first = ecs_vec_first(&denseVec) else { return nil }
-    return first.assumingMemoryBound(to: UInt64.self)
+    let first = ecs_vec_first(&denseVec)
+    if first == nil { return nil }
+    return first!.assumingMemoryBound(to: UInt64.self)
 }

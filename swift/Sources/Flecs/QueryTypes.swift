@@ -1,9 +1,14 @@
 // QueryTypes.swift - 1:1 translation of flecs query internal types
 // Query operations, variables, compiler state, and execution context
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Query Type Aliases
 
 public typealias ecs_var_id_t = UInt8
 public typealias ecs_query_lbl_t = Int16
@@ -13,7 +18,6 @@ public let EcsQueryMaxVarCount: Int32 = 64
 public let EcsVarNone: ecs_var_id_t = UInt8.max
 public let EcsThisName: String = "this"
 
-// MARK: - Variable Kind
 
 public enum ecs_var_kind_t: Int32 {
     case entity = 0
@@ -32,7 +36,6 @@ public struct ecs_query_var_t {
     public init() {}
 }
 
-// MARK: - Query Op Kind
 
 public enum ecs_query_op_kind_t: UInt8 {
     case all = 0
@@ -102,7 +105,6 @@ public enum ecs_query_op_kind_t: UInt8 {
     case nothing = 64
 }
 
-// MARK: - Op Flags
 
 public let EcsQueryIsEntity_: UInt8 = 1 << 0
 public let EcsQueryIsVar_: UInt8 = 1 << 1
@@ -112,7 +114,6 @@ public let EcsQuerySrc_: UInt8 = 0
 public let EcsQueryFirst_: UInt8 = 2
 public let EcsQuerySecond_: UInt8 = 4
 
-// MARK: - Query Reference (union of var id and entity)
 
 public struct ecs_query_ref_t {
     // Union: either a var id or an entity
@@ -121,7 +122,6 @@ public struct ecs_query_ref_t {
     public init() {}
 }
 
-// MARK: - Query Operation
 
 public struct ecs_query_op_t {
     public var kind: UInt8 = 0
@@ -139,7 +139,6 @@ public struct ecs_query_op_t {
     public init() {}
 }
 
-// MARK: - Operation Contexts
 
 public struct ecs_query_all_ctx_t {
     public var cur: Int32 = 0
@@ -258,7 +257,6 @@ public struct ecs_trav_cache_t {
     public init() {}
 }
 
-// MARK: - Op Context (union of all context types)
 // In C this is a union. In Swift we store the largest variant and reinterpret.
 public struct ecs_query_op_ctx_t {
     // We use a raw storage approach since Swift doesn't have C unions
@@ -286,7 +284,6 @@ public struct ecs_query_op_ctx_t {
     }
 }
 
-// MARK: - Query Compiler State
 
 public struct ecs_query_compile_ctrlflow_t {
     public var lbl_query: ecs_query_lbl_t = 0
@@ -320,7 +317,6 @@ public struct ecs_query_compile_ctx_t {
     public init() {}
 }
 
-// MARK: - Query Run State
 
 public struct ecs_query_run_ctx_t {
     public var written: UnsafeMutablePointer<UInt64>? = nil
@@ -335,7 +331,6 @@ public struct ecs_query_run_ctx_t {
     public init() {}
 }
 
-// MARK: - Query Implementation
 
 public struct ecs_query_impl_t {
     public var pub: ecs_query_t = ecs_query_t()

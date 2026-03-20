@@ -2,9 +2,14 @@
 /// Translation of ecs_strbuf_t and its operations from flecs.
 /// String builder with small string optimization.
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Constants
 
 /// Size of the small string optimization buffer.
 public let ECS_STRBUF_SMALL_STRING_SIZE: Int32 = 512
@@ -12,7 +17,6 @@ public let ECS_STRBUF_SMALL_STRING_SIZE: Int32 = 512
 /// Maximum nesting depth for list operations.
 public let ECS_STRBUF_MAX_LIST_DEPTH: Int32 = 32
 
-// MARK: - Types
 
 /// Element tracking for nested list appends.
 public struct ecs_strbuf_list_elem {
@@ -76,7 +80,6 @@ public struct ecs_strbuf_t {
     }
 }
 
-// MARK: - Internal helpers
 
 /// Get a pointer to the small_string inline buffer.
 @inline(__always)
@@ -211,7 +214,6 @@ private func flecs_strbuf_itoa(
     return ptr
 }
 
-// MARK: - Public API
 
 /// Append a string to a buffer.
 public func ecs_strbuf_appendstr(
@@ -243,8 +245,8 @@ public func ecs_strbuf_appendint(
     _ b: UnsafeMutablePointer<ecs_strbuf_t>,
     _ v: Int64)
 {
-    let numbuf = UnsafeMutablePointer<CChar>.allocate(capacity: 32)
-    defer { numbuf.deallocate() }
+    let numbuf = ecs_os_calloc_n(CChar.self, Int32(32))!
+    defer { ecs_os_free(UnsafeMutableRawPointer(numbuf)) }
     let end = flecs_strbuf_itoa(numbuf, v)
     let len = end - numbuf
     ecs_strbuf_appendstrn(b, numbuf, Int32(len))
@@ -257,8 +259,8 @@ public func ecs_strbuf_appendflt(
     _ nan_delim: CChar)
 {
     // Use snprintf for float formatting
-    let buf = UnsafeMutablePointer<CChar>.allocate(capacity: 64)
-    defer { buf.deallocate() }
+    let buf = ecs_os_calloc_n(CChar.self, Int32(64))!
+    defer { ecs_os_free(UnsafeMutableRawPointer(buf)) }
 
     if v.isNaN {
         if nan_delim != 0 {
@@ -304,8 +306,8 @@ public func ecs_strbuf_mergebuff(
     _ dst: UnsafeMutablePointer<ecs_strbuf_t>,
     _ src: UnsafeMutablePointer<ecs_strbuf_t>)
 {
-    if let content = src.pointee.content {
-        flecs_strbuf_appendstr(dst, content, src.pointee.length)
+    if src.pointee.content != nil {
+        flecs_strbuf_appendstr(dst, src.pointee.content!, src.pointee.length)
     }
     ecs_strbuf_reset(src)
 }
@@ -315,7 +317,7 @@ public func ecs_strbuf_mergebuff(
 public func ecs_strbuf_get(
     _ b: UnsafeMutablePointer<ecs_strbuf_t>) -> UnsafeMutablePointer<CChar>?
 {
-    guard b.pointee.content != nil else {
+    if b.pointee.content == nil {
         return nil
     }
 
@@ -342,7 +344,8 @@ public func ecs_strbuf_get(
 public func ecs_strbuf_get_small(
     _ b: UnsafeMutablePointer<ecs_strbuf_t>) -> UnsafeMutablePointer<CChar>?
 {
-    guard let result = b.pointee.content else { return nil }
+    if b.pointee.content == nil { return nil }
+    let result = b.pointee.content!
     result[Int(b.pointee.length)] = 0
     b.pointee.length = 0
     b.pointee.content = nil
@@ -354,8 +357,8 @@ public func ecs_strbuf_get_small(
 public func ecs_strbuf_reset(
     _ b: UnsafeMutablePointer<ecs_strbuf_t>)
 {
-    if let content = b.pointee.content, !strbuf_is_small(b) {
-        free(content)
+    if b.pointee.content != nil && !strbuf_is_small(b) {
+        free(b.pointee.content!)
     }
     b.pointee = ecs_strbuf_t()
 }
@@ -371,12 +374,12 @@ public func ecs_strbuf_list_push(
     stack[Int(b.pointee.list_sp)].count = 0
     stack[Int(b.pointee.list_sp)].separator = separator
 
-    if let list_open = list_open {
-        let ch = list_open[0]
-        if ch != 0 && list_open[1] == 0 {
+    if list_open != nil {
+        let ch = list_open![0]
+        if ch != 0 && list_open![1] == 0 {
             ecs_strbuf_appendch(b, ch)
         } else {
-            ecs_strbuf_appendstr(b, list_open)
+            ecs_strbuf_appendstr(b, list_open!)
         }
     }
 }
@@ -388,12 +391,12 @@ public func ecs_strbuf_list_pop(
 {
     b.pointee.list_sp -= 1
 
-    if let list_close = list_close {
-        let ch = list_close[0]
-        if ch != 0 && list_close[1] == 0 {
+    if list_close != nil {
+        let ch = list_close![0]
+        if ch != 0 && list_close![1] == 0 {
             ecs_strbuf_appendch(b, ch)
         } else {
-            ecs_strbuf_appendstr(b, list_close)
+            ecs_strbuf_appendstr(b, list_close!)
         }
     }
 }
@@ -405,11 +408,11 @@ public func ecs_strbuf_list_next(
     let stack = strbuf_list_stack_ptr(b)
     let list_sp = b.pointee.list_sp
     if stack[Int(list_sp)].count != 0 {
-        if let sep = stack[Int(list_sp)].separator {
-            if sep[0] != 0 && sep[1] == 0 {
-                ecs_strbuf_appendch(b, sep[0])
+        if stack[Int(list_sp)].separator != nil {
+            if stack[Int(list_sp)].separator![0] != 0 && stack[Int(list_sp)].separator![1] == 0 {
+                ecs_strbuf_appendch(b, stack[Int(list_sp)].separator![0])
             } else {
-                ecs_strbuf_appendstr(b, sep)
+                ecs_strbuf_appendstr(b, stack[Int(list_sp)].separator!)
             }
         }
     }

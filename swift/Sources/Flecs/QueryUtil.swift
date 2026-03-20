@@ -1,9 +1,14 @@
 // QueryUtil.swift - 1:1 translation of flecs query/util.c
 // Query utility functions: op strings, term analysis, plan formatting
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Op Kind String
 
 /// Get a human-readable string for a query operation kind.
 public func flecs_query_op_str(_ kind: UInt16) -> UnsafePointer<CChar> {
@@ -49,7 +54,6 @@ private func str(_ s: StaticString) -> UnsafePointer<CChar> {
     }
 }
 
-// MARK: - Type Conversion Helpers
 
 /// Convert int64 to query label (int16).
 @inline(__always)
@@ -69,7 +73,6 @@ public func flecs_utovar(_ val: UInt64) -> ecs_var_id_t {
     return UInt8(truncatingIfNeeded: val)
 }
 
-// MARK: - Term Analysis
 
 /// Check if a term uses a builtin predicate (Eq, Match, Lookup).
 public func flecs_term_is_builtin_pred(
@@ -145,7 +148,6 @@ public func flecs_term_is_or(
     return term.pointee.oper == EcsOr || (!first_term && (term - 1).pointee.oper == EcsOr)
 }
 
-// MARK: - Query Ref Flags
 
 /// Extract ref flags (IsVar/IsEntity) for a given reference kind.
 @inline(__always)
@@ -156,7 +158,6 @@ public func flecs_query_ref_flags(
     return (flags >> kind) & (EcsQueryIsVar | EcsQueryIsEntity)
 }
 
-// MARK: - Written Variable Tracking
 
 /// Check if a variable has been written to.
 @inline(__always)
@@ -206,23 +207,22 @@ public func flecs_ref_is_written(
     return false
 }
 
-// MARK: - Allocator Helper
 
 /// Get the appropriate allocator for a query iterator.
 public func flecs_query_get_allocator(
     _ it: UnsafePointer<ecs_iter_t>) -> UnsafeMutablePointer<ecs_allocator_t>?
 {
-    guard let world = it.pointee.world else { return nil }
-    if flecs_poly_is_(UnsafeRawPointer(world), ecs_world_t_magic) {
-        let w = world.assumingMemoryBound(to: ecs_world_t.self)
+    let world = it.pointee.world
+    if world == nil { return nil }
+    if flecs_poly_is_(UnsafeRawPointer(world!), ecs_world_t_magic) {
+        let w = world!.assumingMemoryBound(to: ecs_world_t.self)
         return withUnsafeMutablePointer(to: &w.pointee.allocator) { $0 }
     } else {
-        let s = world.assumingMemoryBound(to: ecs_stage_t.self)
+        let s = world!.assumingMemoryBound(to: ecs_stage_t.self)
         return withUnsafeMutablePointer(to: &s.pointee.allocator) { $0 }
     }
 }
 
-// MARK: - Term To String
 
 /// Write a term to a string buffer.
 public func flecs_term_to_buf(
@@ -292,18 +292,19 @@ private func flecs_query_str_add_id(
     }
 
     if ref_id != 0 {
-        if let world = world {
-            let w = world.assumingMemoryBound(to: ecs_world_t.self)
-            if let path = ecs_get_path(UnsafePointer(w), ref_id) {
-                ecs_strbuf_appendstr(buf, path)
-                ecs_os_free(UnsafeMutableRawPointer(mutating: path))
+        if world != nil {
+            let w = world!.assumingMemoryBound(to: ecs_world_t.self)
+            let path = ecs_get_path(UnsafePointer(w), ref_id)
+            if path != nil {
+                ecs_strbuf_appendstr(buf, path!)
+                ecs_os_free(UnsafeMutableRawPointer(mutating: path!))
             }
         } else {
             let s = String(ref_id)
             s.withCString { ecs_strbuf_appendstr(buf, $0) }
         }
-    } else if let name = ref.pointee.name {
-        ecs_strbuf_appendstr(buf, name)
+    } else if ref.pointee.name != nil {
+        ecs_strbuf_appendstr(buf, ref.pointee.name!)
     } else {
         ecs_strbuf_appendstr(buf, "#0")
     }

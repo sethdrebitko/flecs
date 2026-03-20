@@ -1,18 +1,23 @@
 // Misc.swift - 1:1 translation of flecs misc.c
 // Utility functions, hashing, and error handling
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Hash Function (FNV-1a)
 
 public func flecs_hash(
     _ data: UnsafeRawPointer?,
     _ length: ecs_size_t
 ) -> UInt64 {
-    guard let data = data, length > 0 else { return 0 }
+    if data == nil || length <= 0 { return 0 }
 
     var hash: UInt64 = 14695981039346656037 // FNV offset basis
-    let bytes = data.assumingMemoryBound(to: UInt8.self)
+    let bytes = data!.assumingMemoryBound(to: UInt8.self)
 
     for i in 0..<Int(length) {
         hash ^= UInt64(bytes[i])
@@ -22,7 +27,6 @@ public func flecs_hash(
     return hash
 }
 
-// MARK: - Power of 2
 
 public func flecs_next_pow_of_2(
     _ n: Int32
@@ -38,7 +42,6 @@ public func flecs_next_pow_of_2(
     return v
 }
 
-// MARK: - Entity Compare
 
 public func flecs_entity_compare(
     _ e1: ecs_entity_t,
@@ -55,32 +58,30 @@ public func flecs_id_qsort_cmp(
     _ a: UnsafeRawPointer?,
     _ b: UnsafeRawPointer?
 ) -> Int32 {
-    guard let a = a, let b = b else { return 0 }
-    let id_a = a.assumingMemoryBound(to: ecs_id_t.self).pointee
-    let id_b = b.assumingMemoryBound(to: ecs_id_t.self).pointee
+    if a == nil || b == nil { return 0 }
+    let id_a = a!.assumingMemoryBound(to: ecs_id_t.self).pointee
+    let id_b = b!.assumingMemoryBound(to: ecs_id_t.self).pointee
     if id_a < id_b { return -1 }
     if id_a > id_b { return 1 }
     return 0
 }
 
-// MARK: - Name/ID helpers
 
 public func flecs_name_is_id(
     _ name: UnsafePointer<CChar>?
 ) -> Bool {
-    guard let name = name else { return false }
-    return name[0] == CChar(UInt8(ascii: "#"))
+    if name == nil { return false }
+    return name![0] == CChar(UInt8(ascii: "#"))
 }
 
 public func flecs_name_to_id(
     _ name: UnsafePointer<CChar>?
 ) -> ecs_entity_t {
-    guard let name = name, name[0] == CChar(UInt8(ascii: "#")) else { return 0 }
-    let str = String(cString: name.advanced(by: 1))
+    if name == nil || name![0] != CChar(UInt8(ascii: "#")) { return 0 }
+    let str = String(cString: name!.advanced(by: 1))
     return ecs_entity_t(str) ?? 0
 }
 
-// MARK: - Integer Conversion (safe cast)
 
 public func flecs_ito_(
     _ dst_size: Int,
@@ -93,7 +94,6 @@ public func flecs_ito_(
     return value
 }
 
-// MARK: - Error String Buffer
 
 // Thread-local error strings for use in assert messages
 private var _errstr_buf = [CChar](repeating: 0, count: 256)
@@ -102,10 +102,10 @@ private var _errstr_1_buf = [CChar](repeating: 0, count: 256)
 public func flecs_errstr(
     _ str: UnsafeMutablePointer<CChar>?
 ) -> UnsafePointer<CChar>? {
-    guard let str = str else { return nil }
+    if str == nil { return nil }
     // Copy and free the original
-    let s = String(cString: str)
-    ecs_os_free(UnsafeMutableRawPointer(str))
+    let s = String(cString: str!)
+    ecs_os_free(UnsafeMutableRawPointer(str!))
     return s.withCString { ptr in
         let len = strlen(ptr)
         _errstr_buf.withUnsafeMutableBufferPointer { buf in
@@ -117,7 +117,6 @@ public func flecs_errstr(
     }
 }
 
-// MARK: - Time Functions
 
 /// Convert ecs_time_t to double (seconds).
 public func ecs_time_to_double(
@@ -163,21 +162,19 @@ public func ecs_time_measure(
     return ecs_time_to_double(stop)
 }
 
-// MARK: - Memory Duplication
 
 /// Duplicate a memory region.
 public func ecs_os_memdup(
     _ src: UnsafeRawPointer?,
     _ size: ecs_size_t) -> UnsafeMutableRawPointer?
 {
-    guard let src = src else { return nil }
+    if src == nil { return nil }
     let dst = ecs_os_malloc(Int32(size))
-    guard let dst = dst else { return nil }
-    memcpy(dst, src, Int(size))
+    if dst == nil { return nil }
+    memcpy(dst!, src!, Int(size))
     return dst
 }
 
-// MARK: - String Escape
 
 /// Escape a single character to a buffer. Returns pointer past written chars.
 public func flecs_chresc(
@@ -276,15 +273,14 @@ public func flecs_astresc(
     _ delimiter: CChar,
     _ in_str: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
 {
-    guard let in_str = in_str else { return nil }
-    let len = flecs_stresc(nil, 0, delimiter, in_str)
-    let out = UnsafeMutablePointer<CChar>.allocate(capacity: Int(len) + 1)
-    flecs_stresc(out, len, delimiter, in_str)
+    if in_str == nil { return nil }
+    let len = flecs_stresc(nil, 0, delimiter, in_str!)
+    let out = ecs_os_calloc_n(CChar.self, Int32(len + 1))!
+    flecs_stresc(out, len, delimiter, in_str!)
     out[Int(len)] = 0
     return out
 }
 
-// MARK: - Snake Case Conversion
 
 /// Convert a CamelCase string to snake_case.
 public func flecs_to_snake_case(
@@ -300,7 +296,7 @@ public func flecs_to_snake_case(
         ptr += 1
     }
 
-    let out = UnsafeMutablePointer<CChar>.allocate(capacity: Int(len + upper_count + 1))
+    let out = ecs_os_calloc_n(CChar.self, Int32(len + upper_count + 1))!
     var out_ptr = out
     ptr = str
 
@@ -323,7 +319,6 @@ public func flecs_to_snake_case(
     return out
 }
 
-// MARK: - Parse Helpers
 
 /// Parse a number from a string into a token buffer.
 public func flecs_parse_digit(
@@ -371,7 +366,6 @@ public func flecs_parse_ws_eol(
     return p
 }
 
-// MARK: - Error String Buffers
 
 private var _errstr_2_buf = [CChar](repeating: 0, count: 256)
 private var _errstr_3_buf = [CChar](repeating: 0, count: 256)
@@ -382,10 +376,10 @@ private func _copy_errstr(
     _ str: UnsafeMutablePointer<CChar>?,
     _ buf: UnsafeMutablePointer<CChar>) -> UnsafePointer<CChar>?
 {
-    guard let str = str else { return nil }
-    strncpy(buf, str, 255)
+    if str == nil { return nil }
+    strncpy(buf, str!, 255)
     buf[255] = 0
-    ecs_os_free(UnsafeMutableRawPointer(str))
+    ecs_os_free(UnsafeMutableRawPointer(str!))
     return UnsafePointer(buf)
 }
 
@@ -405,41 +399,56 @@ public func flecs_errstr_5(_ str: UnsafeMutablePointer<CChar>?) -> UnsafePointer
     return _copy_errstr(str, &_errstr_5_buf)
 }
 
-// MARK: - File Loading
 
 /// Load file contents into a string.
 public func flecs_load_from_file(
     _ filename: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
 {
-    // Would use fopen/fread/fclose - simplified for Swift
-    guard let data = try? Data(contentsOf: URL(fileURLWithPath: String(cString: filename))) else {
+    let file = fopen(filename, "r")
+    if file == nil {
         return nil
     }
-    let result = UnsafeMutablePointer<CChar>.allocate(capacity: data.count + 1)
-    data.withUnsafeBytes { bytes in
-        if let base = bytes.baseAddress {
-            memcpy(result, base, data.count)
-        }
+
+    fseek(file, 0, SEEK_END)
+    let bytes = Int32(ftell(file))
+    if bytes == -1 {
+        fclose(file)
+        return nil
     }
-    result[data.count] = 0
-    return result
+    fseek(file, 0, SEEK_SET)
+
+    let content = ecs_os_malloc(ecs_size_t(bytes + 1))
+    if content == nil {
+        fclose(file)
+        return nil
+    }
+
+    let size = fread(content, 1, Int(bytes), file)
+    if size == 0 && bytes > 0 {
+        ecs_os_free(content)
+        fclose(file)
+        return nil
+    }
+
+    content!.assumingMemoryBound(to: CChar.self)[size] = 0
+    fclose(file)
+    return content!.assumingMemoryBound(to: CChar.self)
 }
 
-// MARK: - Type Size
 
 public func flecs_type_size(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ type_entity: ecs_entity_t
 ) -> ecs_size_t {
     // Look up type info from the world's type_info map
-    guard let val = ecs_map_get(&world.pointee.type_info, type_entity) else {
+    let val = ecs_map_get(&world.pointee.type_info, type_entity)
+    if val == nil {
         return 0
     }
-    let ti = UnsafePointer<ecs_type_info_t>(bitPattern: UInt(val.pointee))
+    let ti = UnsafePointer<ecs_type_info_t>(bitPattern: UInt(val!.pointee))
     return ti?.pointee.size ?? 0
 }
 
-// MARK: - Bloom Filter
 
 @inline(__always)
 public func flecs_table_bloom_filter_add(

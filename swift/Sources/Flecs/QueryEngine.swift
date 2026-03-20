@@ -1,17 +1,23 @@
 // QueryEngine.swift - 1:1 translation of flecs query/engine/*.c
 // Query execution: op dispatch, table matching, traversal, iteration
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Op Context Access
 
 /// Helper to access typed op context from the generic context array.
 @inline(__always)
 public func flecs_op_ctx_and(
     _ ctx: UnsafePointer<ecs_query_run_ctx_t>) -> UnsafeMutablePointer<ecs_query_and_ctx_t>?
 {
-    guard let op_ctx = ctx.pointee.op_ctx else { return nil }
-    let ptr = op_ctx + Int(ctx.pointee.op_index)
+    let op_ctx = ctx.pointee.op_ctx
+    if op_ctx == nil { return nil }
+    let ptr = op_ctx! + Int(ctx.pointee.op_index)
     return withUnsafeMutablePointer(to: &ptr.pointee.storage) { storage in
         UnsafeMutableRawPointer(storage)
             .bindMemory(to: ecs_query_and_ctx_t.self, capacity: 1)
@@ -22,8 +28,9 @@ public func flecs_op_ctx_and(
 public func flecs_op_ctx_all(
     _ ctx: UnsafePointer<ecs_query_run_ctx_t>) -> UnsafeMutablePointer<ecs_query_all_ctx_t>?
 {
-    guard let op_ctx = ctx.pointee.op_ctx else { return nil }
-    let ptr = op_ctx + Int(ctx.pointee.op_index)
+    let op_ctx = ctx.pointee.op_ctx
+    if op_ctx == nil { return nil }
+    let ptr = op_ctx! + Int(ctx.pointee.op_index)
     return withUnsafeMutablePointer(to: &ptr.pointee.storage) { storage in
         UnsafeMutableRawPointer(storage)
             .bindMemory(to: ecs_query_all_ctx_t.self, capacity: 1)
@@ -34,15 +41,15 @@ public func flecs_op_ctx_all(
 public func flecs_op_ctx_each(
     _ ctx: UnsafePointer<ecs_query_run_ctx_t>) -> UnsafeMutablePointer<ecs_query_each_ctx_t>?
 {
-    guard let op_ctx = ctx.pointee.op_ctx else { return nil }
-    let ptr = op_ctx + Int(ctx.pointee.op_index)
+    let op_ctx = ctx.pointee.op_ctx
+    if op_ctx == nil { return nil }
+    let ptr = op_ctx! + Int(ctx.pointee.op_index)
     return withUnsafeMutablePointer(to: &ptr.pointee.storage) { storage in
         UnsafeMutableRawPointer(storage)
             .bindMemory(to: ecs_query_each_ctx_t.self, capacity: 1)
     }
 }
 
-// MARK: - Table Filtering
 
 /// Check if a table should be filtered out based on flags.
 public func flecs_query_table_filter(
@@ -57,7 +64,6 @@ public func flecs_query_table_filter(
     return false
 }
 
-// MARK: - Variable Operations
 
 /// Set a variable to a table range.
 public func flecs_query_var_set_range(
@@ -68,10 +74,11 @@ public func flecs_query_var_set_range(
     _ count: Int32,
     _ ctx: UnsafePointer<ecs_query_run_ctx_t>)
 {
-    guard let vars = ctx.pointee.vars else { return }
-    vars[Int(var_id)].range.table = table
-    vars[Int(var_id)].range.offset = offset
-    vars[Int(var_id)].range.count = count
+    let vars = ctx.pointee.vars
+    if vars == nil { return }
+    vars![Int(var_id)].range.table = table
+    vars![Int(var_id)].range.offset = offset
+    vars![Int(var_id)].range.count = count
 }
 
 /// Set a variable to an entity.
@@ -81,8 +88,9 @@ public func flecs_query_var_set_entity(
     _ entity: ecs_entity_t,
     _ ctx: UnsafePointer<ecs_query_run_ctx_t>)
 {
-    guard let vars = ctx.pointee.vars else { return }
-    vars[Int(var_id)].entity = entity
+    let vars = ctx.pointee.vars
+    if vars == nil { return }
+    vars![Int(var_id)].entity = entity
 }
 
 /// Get entity from a variable.
@@ -90,8 +98,9 @@ public func flecs_query_var_get_entity(
     _ var_id: ecs_var_id_t,
     _ ctx: UnsafePointer<ecs_query_run_ctx_t>) -> ecs_entity_t
 {
-    guard let vars = ctx.pointee.vars else { return 0 }
-    return vars[Int(var_id)].entity
+    let vars = ctx.pointee.vars
+    if vars == nil { return 0 }
+    return vars![Int(var_id)].entity
 }
 
 /// Get table from a variable.
@@ -99,11 +108,11 @@ public func flecs_query_var_get_table(
     _ var_id: ecs_var_id_t,
     _ ctx: UnsafePointer<ecs_query_run_ctx_t>) -> UnsafeMutablePointer<ecs_table_t>?
 {
-    guard let vars = ctx.pointee.vars else { return nil }
-    return vars[Int(var_id)].range.table
+    let vars = ctx.pointee.vars
+    if vars == nil { return nil }
+    return vars![Int(var_id)].range.table
 }
 
-// MARK: - Id Resolution
 
 /// Get the resolved id for an operation.
 public func flecs_query_op_get_id(
@@ -134,7 +143,6 @@ public func flecs_query_op_get_id(
     return ecs_pair(first, second)
 }
 
-// MARK: - Match Setting
 
 /// Set the match result for an operation (id + table record).
 public func flecs_query_set_match(
@@ -144,10 +152,12 @@ public func flecs_query_set_match(
     _ ctx: UnsafePointer<ecs_query_run_ctx_t>)
 {
     let field_index = op.pointee.field_index
-    guard field_index >= 0, let it = ctx.pointee.it else { return }
+    if field_index < 0 { return }
+    let it = ctx.pointee.it
+    if it == nil { return }
 
     if column >= 0 && column < table.pointee.type.count {
-        it.pointee.ids![Int(field_index)] = table.pointee.type.array![Int(column)]
+        it!.pointee.ids![Int(field_index)] = table.pointee.type.array![Int(column)]
     }
 }
 
@@ -157,12 +167,13 @@ public func flecs_query_next_column(
     _ id: ecs_id_t,
     _ column: Int16) -> Int16
 {
-    guard let array = table.pointee.type.array else { return -1 }
+    let array = table.pointee.type.array
+    if array == nil { return -1 }
     let count = table.pointee.type.count
     var i = Int(column) + 1
 
     while i < Int(count) {
-        if ecs_id_match(array[i], id) {
+        if ecs_id_match(array![i], id) {
             return Int16(i)
         }
         i += 1
@@ -185,7 +196,6 @@ public func flecs_query_get_table(
     return nil
 }
 
-// MARK: - Core Operations
 
 /// Select operation: find tables matching an id.
 public func flecs_query_select_w_id(
@@ -195,46 +205,51 @@ public func flecs_query_select_w_id(
     _ id: ecs_id_t,
     _ filter_mask: ecs_flags32_t) -> Bool
 {
-    guard let op_ctx = flecs_op_ctx_and(ctx) else { return false }
-    guard let world = ctx.pointee.world?.assumingMemoryBound(
-        to: ecs_world_t.self) else { return false }
+    let op_ctx = flecs_op_ctx_and(ctx)
+    if op_ctx == nil { return false }
+    let world = ctx.pointee.world?.assumingMemoryBound(
+        to: ecs_world_t.self)
+    if world == nil { return false }
 
     if !redo {
         // Initialize: look up component record and start iterating
-        if op_ctx.pointee.cr == nil || op_ctx.pointee.cr!.pointee.id != id {
-            guard let cr = flecs_components_get(UnsafePointer(world), id) else {
+        if op_ctx!.pointee.cr == nil || op_ctx!.pointee.cr!.pointee.id != id {
+            let cr = flecs_components_get(UnsafePointer(world!), id)
+            if cr == nil {
                 return false
             }
-            op_ctx.pointee.cr = UnsafeMutableRawPointer(cr)
+            op_ctx!.pointee.cr = UnsafeMutableRawPointer(cr!)
         }
 
-        let cr = op_ctx.pointee.cr!.assumingMemoryBound(
+        let cr = op_ctx!.pointee.cr!.assumingMemoryBound(
             to: ecs_component_record_t.self)
-        if !flecs_table_cache_iter(&cr.pointee.cache, &op_ctx.pointee.it) {
+        if !flecs_table_cache_iter(&cr.pointee.cache, &op_ctx!.pointee.it) {
             return false
         }
     }
 
     // Get next table from cache iterator
-    guard let next = flecs_table_cache_next(
-        &op_ctx.pointee.it) else {
+    let next = flecs_table_cache_next(
+        &op_ctx!.pointee.it)
+    if next == nil {
         return false
     }
 
-    let tr = next.bindMemory(to: ecs_table_record_t.self, capacity: 1)
-    guard let table = tr.pointee.hdr.table else { return false }
+    let tr = next!.bindMemory(to: ecs_table_record_t.self, capacity: 1)
+    let table = tr.pointee.hdr.table
+    if table == nil { return false }
 
-    op_ctx.pointee.column = Int16(tr.pointee.index)
-    op_ctx.pointee.remaining = Int16(tr.pointee.count - 1)
+    op_ctx!.pointee.column = Int16(tr.pointee.index)
+    op_ctx!.pointee.remaining = Int16(tr.pointee.count - 1)
 
     // Filter
-    if flecs_query_table_filter(table, op.pointee.other, filter_mask) {
+    if flecs_query_table_filter(table!, op.pointee.other, filter_mask) {
         // Skip and try next (in full impl this would loop)
         return false
     }
 
-    flecs_query_var_set_range(op, op.pointee.src.var_id, table, 0, 0, ctx)
-    flecs_query_set_match(op, table, op_ctx.pointee.column, ctx)
+    flecs_query_var_set_range(op, op.pointee.src.var_id, table!, 0, 0, ctx)
+    flecs_query_set_match(op, table!, op_ctx!.pointee.column, ctx)
     return true
 }
 
@@ -258,40 +273,45 @@ public func flecs_query_with(
     _ redo: Bool,
     _ ctx: UnsafePointer<ecs_query_run_ctx_t>) -> Bool
 {
-    guard let op_ctx = flecs_op_ctx_and(ctx) else { return false }
-    guard let world = ctx.pointee.world?.assumingMemoryBound(
-        to: ecs_world_t.self) else { return false }
-    guard let table = flecs_query_get_table(
-        op, &op.pointee.src, EcsQuerySrc, ctx) else {
+    let op_ctx = flecs_op_ctx_and(ctx)
+    if op_ctx == nil { return false }
+    let world = ctx.pointee.world?.assumingMemoryBound(
+        to: ecs_world_t.self)
+    if world == nil { return false }
+    let table = flecs_query_get_table(
+        op, &op.pointee.src, EcsQuerySrc, ctx)
+    if table == nil {
         return false
     }
 
     if !redo {
         let id = flecs_query_op_get_id(op, ctx)
-        guard let cr = flecs_components_get(UnsafePointer(world), id) else {
+        let cr = flecs_components_get(UnsafePointer(world!), id)
+        if cr == nil {
             return false
         }
-        op_ctx.pointee.cr = UnsafeMutableRawPointer(cr)
+        op_ctx!.pointee.cr = UnsafeMutableRawPointer(cr!)
 
-        guard let tr = flecs_component_get_table(UnsafePointer(cr), UnsafePointer(table)) else {
+        let tr = flecs_component_get_table(UnsafePointer(cr!), UnsafePointer(table!))
+        if tr == nil {
             return false
         }
 
-        op_ctx.pointee.column = Int16(tr.pointee.index)
-        op_ctx.pointee.remaining = Int16(tr.pointee.count)
+        op_ctx!.pointee.column = Int16(tr!.pointee.index)
+        op_ctx!.pointee.remaining = Int16(tr!.pointee.count)
     } else {
-        if op_ctx.pointee.remaining <= 1 {
+        if op_ctx!.pointee.remaining <= 1 {
             return false
         }
-        op_ctx.pointee.remaining -= 1
+        op_ctx!.pointee.remaining -= 1
 
-        let cr = op_ctx.pointee.cr!.assumingMemoryBound(
+        let cr = op_ctx!.pointee.cr!.assumingMemoryBound(
             to: ecs_component_record_t.self)
-        op_ctx.pointee.column = flecs_query_next_column(
-            table, cr.pointee.id, op_ctx.pointee.column)
+        op_ctx!.pointee.column = flecs_query_next_column(
+            table!, cr.pointee.id, op_ctx!.pointee.column)
     }
 
-    flecs_query_set_match(op, table, op_ctx.pointee.column, ctx)
+    flecs_query_set_match(op, table!, op_ctx!.pointee.column, ctx)
     return true
 }
 
@@ -301,36 +321,39 @@ public func flecs_query_all(
     _ redo: Bool,
     _ ctx: UnsafePointer<ecs_query_run_ctx_t>) -> Bool
 {
-    guard let world = ctx.pointee.world?.assumingMemoryBound(
-        to: ecs_world_t.self) else { return false }
-    guard let op_ctx = flecs_op_ctx_all(ctx) else { return false }
+    let world = ctx.pointee.world?.assumingMemoryBound(
+        to: ecs_world_t.self)
+    if world == nil { return false }
+    let op_ctx = flecs_op_ctx_all(ctx)
+    if op_ctx == nil { return false }
 
-    let tables = withUnsafeMutablePointer(to: &world.pointee.store.tables) { $0 }
+    let tables = withUnsafeMutablePointer(to: &world!.pointee.store.tables) { $0 }
 
     if !redo {
-        op_ctx.pointee.cur = 0
+        op_ctx!.pointee.cur = 0
         // Start with root table
-        let table = withUnsafeMutablePointer(to: &world.pointee.store.root) { $0 }
+        let table = withUnsafeMutablePointer(to: &world!.pointee.store.root) { $0 }
         if !flecs_query_table_filter(table, op.pointee.other,
             EcsTableNotQueryable | EcsTableIsPrefab | EcsTableIsDisabled)
         {
             flecs_query_var_set_range(op, op.pointee.src.var_id, table, 0, 0, ctx)
-            op_ctx.pointee.cur = 1
+            op_ctx!.pointee.cur = 1
             return true
         }
     }
 
     // Iterate remaining tables
     let count = flecs_sparse_count(tables)
-    while op_ctx.pointee.cur < count {
-        guard let table = flecs_sparse_get_dense(
-            tables, Int32(MemoryLayout<ecs_table_t>.stride), op_ctx.pointee.cur)?
-            .bindMemory(to: ecs_table_t.self, capacity: 1) else {
-            op_ctx.pointee.cur += 1
+    while op_ctx!.pointee.cur < count {
+        let table_raw = flecs_sparse_get_dense(
+            tables, Int32(MemoryLayout<ecs_table_t>.stride), op_ctx!.pointee.cur)
+        if table_raw == nil {
+            op_ctx!.pointee.cur += 1
             continue
         }
+        let table = table_raw!.bindMemory(to: ecs_table_t.self, capacity: 1)
 
-        op_ctx.pointee.cur += 1
+        op_ctx!.pointee.cur += 1
 
         if table.pointee.data.count == 0 {
             continue
@@ -351,7 +374,6 @@ public func flecs_query_all(
     return false
 }
 
-// MARK: - Op Dispatch
 
 /// Dispatch a query operation based on its kind.
 public func flecs_query_dispatch(
@@ -388,16 +410,17 @@ public func flecs_query_dispatch(
     }
 }
 
-// MARK: - Query Run
 
 /// Run a compiled query program.
 /// Returns true if the next result was found.
 public func flecs_query_run(
     _ it: UnsafeMutablePointer<ecs_iter_t>) -> Bool
 {
-    guard let query = it.pointee.query else { return false }
-    let impl = flecs_query_impl(UnsafePointer(query))
-    guard let ops = impl.pointee.ops else { return false }
+    let query = it.pointee.query
+    if query == nil { return false }
+    let impl = flecs_query_impl(UnsafePointer(query!))
+    let ops = impl.pointee.ops
+    if ops == nil { return false }
     let op_count = impl.pointee.op_count
     if op_count == 0 { return false }
 
@@ -409,15 +432,12 @@ public func flecs_query_run(
     ctx.op_index = 0
 
     // Allocate op contexts
-    let op_ctxs = UnsafeMutablePointer<ecs_query_op_ctx_t>
-        .allocate(capacity: Int(op_count))
-    op_ctxs.initialize(repeating: ecs_query_op_ctx_t(), count: Int(op_count))
+    let op_ctxs = ecs_os_calloc_n(ecs_query_op_ctx_t.self, op_count)!
     ctx.op_ctx = op_ctxs
 
     // Allocate variables
     let var_count = max(impl.pointee.var_count, 1)
-    let vars = UnsafeMutablePointer<ecs_var_t>.allocate(capacity: Int(var_count))
-    vars.initialize(repeating: ecs_var_t(), count: Int(var_count))
+    let vars = ecs_os_calloc_n(ecs_var_t.self, var_count)!
     ctx.vars = vars
 
     // Allocate written flags
@@ -428,7 +448,7 @@ public func flecs_query_run(
     var redo = false
 
     while op_index >= 0 && op_index < op_count {
-        let op = ops + Int(op_index)
+        let op = ops! + Int(op_index)
         ctx.op_index = op_index
         written[Int(op_index)] = 0  // Reset for this op
 
@@ -438,14 +458,15 @@ public func flecs_query_run(
             // Operation succeeded, move to next
             if op.pointee.kind == UInt8(EcsQueryYield) {
                 // Found a result, populate iterator
-                if let table = flecs_query_var_get_table(0, &ctx) {
-                    it.pointee.table = table
-                    it.pointee.count = table.pointee.data.count
-                    it.pointee.entities = table.pointee.data.entities
+                let table = flecs_query_var_get_table(0, &ctx)
+                if table != nil {
+                    it.pointee.table = table!
+                    it.pointee.count = table!.pointee.data.count
+                    it.pointee.entities = table!.pointee.data.entities
                 }
 
-                op_ctxs.deallocate()
-                vars.deallocate()
+                ecs_os_free(UnsafeMutableRawPointer(op_ctxs))
+                ecs_os_free(UnsafeMutableRawPointer(vars))
                 return true
             }
 
@@ -458,12 +479,11 @@ public func flecs_query_run(
         }
     }
 
-    op_ctxs.deallocate()
-    vars.deallocate()
+    ecs_os_free(UnsafeMutableRawPointer(op_ctxs))
+    ecs_os_free(UnsafeMutableRawPointer(vars))
     return false
 }
 
-// MARK: - Trivial Iteration
 
 /// Fast-path iteration for trivial queries (all terms are simple And/$this/Self).
 public func flecs_query_trivial_search(
@@ -472,39 +492,45 @@ public func flecs_query_trivial_search(
     _ trivial_ctx: UnsafeMutablePointer<ecs_query_trivial_ctx_t>,
     _ redo: Bool) -> Bool
 {
-    guard let world = ctx.pointee.world?.assumingMemoryBound(
-        to: ecs_world_t.self) else { return false }
-    guard let terms = q.pointee.terms else { return false }
+    let world = ctx.pointee.world?.assumingMemoryBound(
+        to: ecs_world_t.self)
+    if world == nil { return false }
+    let terms = q.pointee.terms
+    if terms == nil { return false }
 
     let term_count = q.pointee.term_count
     if term_count == 0 { return false }
 
     // Use the first term's component record to iterate tables
-    let first_id = terms[0].id
-    guard let cr = flecs_components_get(UnsafePointer(world), first_id) else {
+    let first_id = terms![0].id
+    let cr = flecs_components_get(UnsafePointer(world!), first_id)
+    if cr == nil {
         return false
     }
 
     if !redo {
-        if !flecs_table_cache_iter(&cr.pointee.cache, &trivial_ctx.pointee.it) {
+        if !flecs_table_cache_iter(&cr!.pointee.cache, &trivial_ctx.pointee.it) {
             return false
         }
     }
 
     // Find next table that matches ALL terms
-    while let next = flecs_table_cache_next(&trivial_ctx.pointee.it) {
-        let tr = next.bindMemory(to: ecs_table_record_t.self, capacity: 1)
-        guard let table = tr.pointee.hdr.table else { continue }
+    while true {
+        let next = flecs_table_cache_next(&trivial_ctx.pointee.it)
+        if next == nil { break }
+        let tr = next!.bindMemory(to: ecs_table_record_t.self, capacity: 1)
+        let table = tr.pointee.hdr.table
+        if table == nil { continue }
 
         // Skip empty/filtered tables
-        if table.pointee.data.count == 0 { continue }
-        if (table.pointee.flags & (EcsTableNotQueryable | EcsTableIsPrefab | EcsTableIsDisabled)) != 0 {
+        if table!.pointee.data.count == 0 { continue }
+        if (table!.pointee.flags & (EcsTableNotQueryable | EcsTableIsPrefab | EcsTableIsDisabled)) != 0 {
             continue
         }
 
         // Check remaining terms via bloom filter
         if q.pointee.bloom_filter != 0 {
-            if (table.pointee.bloom_filter & q.pointee.bloom_filter) != q.pointee.bloom_filter {
+            if (table!.pointee.bloom_filter & q.pointee.bloom_filter) != q.pointee.bloom_filter {
                 continue
             }
         }
@@ -512,8 +538,9 @@ public func flecs_query_trivial_search(
         // Verify all terms match (for terms beyond the first)
         var all_match = true
         for t in 1..<Int(term_count) {
-            if let t_cr = flecs_components_get(UnsafePointer(world), terms[t].id) {
-                if flecs_component_get_table(UnsafePointer(t_cr), UnsafePointer(table)) == nil {
+            let t_cr = flecs_components_get(UnsafePointer(world!), terms![t].id)
+            if t_cr != nil {
+                if flecs_component_get_table(UnsafePointer(t_cr!), UnsafePointer(table!)) == nil {
                     all_match = false
                     break
                 }
@@ -526,15 +553,17 @@ public func flecs_query_trivial_search(
         if !all_match { continue }
 
         // Match found
-        if let it = ctx.pointee.it {
-            it.pointee.table = table
-            it.pointee.count = table.pointee.data.count
-            it.pointee.entities = table.pointee.data.entities
+        let it = ctx.pointee.it
+        if it != nil {
+            it!.pointee.table = table!
+            it!.pointee.count = table!.pointee.data.count
+            it!.pointee.entities = table!.pointee.data.entities
 
             // Set ids for each field
             for t in 0..<Int(term_count) {
-                if let id_array = it.pointee.ids {
-                    id_array[t] = terms[t].id
+                let id_array = it!.pointee.ids
+                if id_array != nil {
+                    id_array![t] = terms![t].id
                 }
             }
         }
@@ -545,7 +574,6 @@ public func flecs_query_trivial_search(
     return false
 }
 
-// MARK: - Eval Utilities
 
 /// Populate iterator fields from a cache match.
 public func flecs_query_populate_fields_from_cache(
@@ -553,21 +581,25 @@ public func flecs_query_populate_fields_from_cache(
     _ match: UnsafePointer<ecs_query_cache_match_t>,
     _ cache: UnsafePointer<ecs_query_cache_t>)
 {
-    guard let table = match.pointee.table_cache_hdr.table else { return }
+    let table = match.pointee.table_cache_hdr.table
+    if table == nil { return }
 
-    it.pointee.table = table
-    it.pointee.count = table.pointee.data.count
-    it.pointee.entities = table.pointee.data.entities
+    it.pointee.table = table!
+    it.pointee.count = table!.pointee.data.count
+    it.pointee.entities = table!.pointee.data.entities
 
     // Copy match ids, sources, trs to iterator
     let field_count = it.pointee.field_count
-    if let ids = match.pointee.ids, let it_ids = it.pointee.ids {
+    let ids = match.pointee.ids
+    let it_ids = it.pointee.ids
+    if ids != nil && it_ids != nil {
         for i in 0..<Int(field_count) {
-            if let field_map = cache.pointee.field_map {
-                let dst_field = Int(field_map[i])
-                it_ids[dst_field] = ids[i]
+            let field_map = cache.pointee.field_map
+            if field_map != nil {
+                let dst_field = Int(field_map![i])
+                it_ids![dst_field] = ids![i]
             } else {
-                it_ids[i] = ids[i]
+                it_ids![i] = ids![i]
             }
         }
     }
@@ -575,7 +607,6 @@ public func flecs_query_populate_fields_from_cache(
     it.pointee.set_fields = match.pointee.set_fields
 }
 
-// MARK: - Traversal Cache
 
 /// Initialize a traversal cache for up/down lookups.
 public func flecs_query_trav_cache_init(
@@ -595,7 +626,6 @@ public func flecs_query_trav_cache_fini(
     ecs_vec_fini(a, &cache.pointee.entities, elem_size)
 }
 
-// MARK: - Iterator Variable Helpers (Public API)
 
 /// Set a variable on a query iterator to an entity.
 public func ecs_iter_set_var(

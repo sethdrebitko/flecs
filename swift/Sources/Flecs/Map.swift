@@ -2,9 +2,14 @@
 /// Translation of ecs_map_t and its operations from flecs.
 /// Hash map with uint64 keys and uint64 values.
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Types
 
 // ecs_map_key_t, ecs_map_val_t, ecs_map_data_t defined in Types.swift
 
@@ -80,7 +85,6 @@ public struct ecs_map_iter_t {
     }
 }
 
-// MARK: - Internal helpers
 
 @inline(__always)
 internal func flecs_log2(_ v: UInt32) -> UInt8 {
@@ -128,7 +132,7 @@ internal func flecs_map_bucket_add(
     _ bucket: UnsafeMutablePointer<ecs_bucket_t>,
     _ key: ecs_map_key_t) -> UnsafeMutablePointer<ecs_map_val_t>
 {
-    let new_entry = UnsafeMutablePointer<ecs_bucket_entry_t>.allocate(capacity: 1)
+    let new_entry = ecs_os_calloc_t(ecs_bucket_entry_t.self)!
     new_entry.pointee.key = key
     new_entry.pointee.value = 0
     new_entry.pointee.next = bucket.pointee.first
@@ -142,21 +146,21 @@ internal func flecs_map_bucket_remove(
     _ key: ecs_map_key_t) -> ecs_map_val_t
 {
     var entry = bucket.pointee.first
-    while let e = entry {
-        if e.pointee.key == key {
-            let value = e.pointee.value
+    while entry != nil {
+        if entry!.pointee.key == key {
+            let value = entry!.pointee.value
             // Find and unlink
             var next_holder: UnsafeMutablePointer<UnsafeMutablePointer<ecs_bucket_entry_t>?> =
                 withUnsafeMutablePointer(to: &bucket.pointee.first) { $0 }
-            while next_holder.pointee != e {
+            while next_holder.pointee != entry {
                 next_holder = withUnsafeMutablePointer(to: &next_holder.pointee!.pointee.next) { $0 }
             }
-            next_holder.pointee = e.pointee.next
-            e.deallocate()
+            next_holder.pointee = entry!.pointee.next
+            ecs_os_free(UnsafeMutableRawPointer(entry!))
             map.pointee.count -= 1
             return value
         }
-        entry = e.pointee.next
+        entry = entry!.pointee.next
     }
     return 0
 }
@@ -166,9 +170,9 @@ internal func flecs_map_bucket_clear(
     _ bucket: UnsafeMutablePointer<ecs_bucket_t>)
 {
     var entry = bucket.pointee.first
-    while let e = entry {
-        let next = e.pointee.next
-        e.deallocate()
+    while entry != nil {
+        let next = entry!.pointee.next
+        ecs_os_free(UnsafeMutableRawPointer(entry!))
         entry = next
     }
     bucket.pointee.first = nil
@@ -179,11 +183,11 @@ internal func flecs_map_bucket_get(
     _ key: ecs_map_key_t) -> UnsafeMutablePointer<ecs_map_val_t>?
 {
     var entry = bucket.pointee.first
-    while let e = entry {
-        if e.pointee.key == key {
-            return withUnsafeMutablePointer(to: &e.pointee.value) { $0 }
+    while entry != nil {
+        if entry!.pointee.key == key {
+            return withUnsafeMutablePointer(to: &entry!.pointee.value) { $0 }
         }
-        entry = e.pointee.next
+        entry = entry!.pointee.next
     }
     return nil
 }
@@ -200,30 +204,28 @@ internal func flecs_map_rehash(
     let old_count = map.pointee.bucket_count
     let old_buckets = map.pointee.buckets
 
-    let new_buckets = UnsafeMutablePointer<ecs_bucket_t>.allocate(capacity: Int(count))
-    new_buckets.initialize(repeating: ecs_bucket_t(), count: Int(count))
+    let new_buckets = ecs_os_calloc_n(ecs_bucket_t.self, Int32(count))!
     map.pointee.buckets = new_buckets
     map.pointee.bucket_count = count
     map.pointee.bucket_shift = UInt32(flecs_map_get_bucket_shift(count)) & 0x3F
 
-    if let old_buckets = old_buckets {
+    if old_buckets != nil {
         for i in 0..<Int(old_count) {
-            var entry = old_buckets[i].first
-            while let e = entry {
-                let next = e.pointee.next
+            var entry = old_buckets![i].first
+            while entry != nil {
+                let next = entry!.pointee.next
                 let bucket_index = flecs_map_get_bucket_index(
-                    UInt16(map.pointee.bucket_shift), e.pointee.key)
+                    UInt16(map.pointee.bucket_shift), entry!.pointee.key)
                 let bucket = &new_buckets[Int(bucket_index)]
-                e.pointee.next = bucket.pointee.first
-                bucket.pointee.first = e
+                entry!.pointee.next = bucket.pointee.first
+                bucket.pointee.first = entry
                 entry = next
             }
         }
-        old_buckets.deallocate()
+        ecs_os_free(UnsafeMutableRawPointer(old_buckets!))
     }
 }
 
-// MARK: - Public API
 
 public func ecs_map_init(
     _ result: UnsafeMutablePointer<ecs_map_t>,
@@ -250,11 +252,11 @@ public func ecs_map_fini(
         return
     }
 
-    if let buckets = map.pointee.buckets {
+    if map.pointee.buckets != nil {
         for i in 0..<Int(map.pointee.bucket_count) {
-            flecs_map_bucket_clear(map.pointee.allocator, &buckets[i])
+            flecs_map_bucket_clear(map.pointee.allocator, &map.pointee.buckets![i])
         }
-        buckets.deallocate()
+        ecs_os_free(UnsafeMutableRawPointer(map.pointee.buckets!))
     }
 
     map.pointee.bucket_shift = 0
@@ -275,10 +277,11 @@ public func ecs_map_get_deref_(
     _ key: ecs_map_key_t) -> UnsafeMutableRawPointer?
 {
     let bucket = flecs_map_get_bucket(map, key)
-    guard let ptr = flecs_map_bucket_get(bucket, key) else {
+    let ptr = flecs_map_bucket_get(bucket, key)
+    if ptr == nil {
         return nil
     }
-    let val = ptr.pointee
+    let val = ptr!.pointee
     if val == 0 { return nil }
     return UnsafeMutableRawPointer(bitPattern: UInt(val))
 }
@@ -288,8 +291,9 @@ public func ecs_map_ensure(
     _ key: ecs_map_key_t) -> UnsafeMutablePointer<ecs_map_val_t>
 {
     let bucket = flecs_map_get_bucket(UnsafePointer(map), key)
-    if let result = flecs_map_bucket_get(bucket, key) {
-        return result
+    let result = flecs_map_bucket_get(bucket, key)
+    if result != nil {
+        return result!
     }
 
     map.pointee.count += 1
@@ -372,11 +376,11 @@ public func ecs_map_remove_free(
 public func ecs_map_clear(
     _ map: UnsafeMutablePointer<ecs_map_t>)
 {
-    if let buckets = map.pointee.buckets {
+    if map.pointee.buckets != nil {
         for i in 0..<Int(map.pointee.bucket_count) {
-            flecs_map_bucket_clear(map.pointee.allocator, &buckets[i])
+            flecs_map_bucket_clear(map.pointee.allocator, &map.pointee.buckets![i])
         }
-        buckets.deallocate()
+        ecs_os_free(UnsafeMutableRawPointer(map.pointee.buckets!))
     }
     map.pointee.buckets = nil
     map.pointee.bucket_count = 0
@@ -409,9 +413,10 @@ public func ecs_map_iter(
 public func ecs_map_next(
     _ iter: UnsafeMutablePointer<ecs_map_iter_t>) -> Bool
 {
-    guard let map = iter.pointee.map else {
+    if iter.pointee.map == nil {
         return false
     }
+    let map = iter.pointee.map!
 
     let end = map.pointee.buckets!.advanced(by: Int(map.pointee.bucket_count))
 
@@ -454,11 +459,11 @@ public func ecs_map_next(
         entry = iter.pointee.entry
     }
 
-    guard let e = entry else {
+    if entry == nil {
         return false
     }
-    iter.pointee.entry = e.pointee.next
-    iter.pointee.res = withUnsafeMutablePointer(to: &e.pointee.key) {
+    iter.pointee.entry = entry!.pointee.next
+    iter.pointee.res = withUnsafeMutablePointer(to: &entry!.pointee.key) {
         UnsafeMutablePointer<ecs_map_data_t>(OpaquePointer($0))
     }
     return true
@@ -512,7 +517,6 @@ public func ecs_map_reclaim(
     }
 }
 
-// MARK: - UnsafeMutablePointer overloads
 
 /// ecs_map_get accepting UnsafeMutablePointer (no mutation).
 public func ecs_map_get(

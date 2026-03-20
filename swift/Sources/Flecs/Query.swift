@@ -1,9 +1,14 @@
 // Query.swift - 1:1 translation of flecs query/api.c
 // Query creation, iteration, destruction, and public API
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Query Impl Accessor
 
 /// Get the implementation struct from a public query pointer.
 @inline(__always)
@@ -14,7 +19,6 @@ public func flecs_query_impl(
         .bindMemory(to: ecs_query_impl_t.self, capacity: 1)
 }
 
-// MARK: - Query Variable Lookup
 
 /// Find a query variable by name.
 public func ecs_query_find_var(
@@ -43,8 +47,9 @@ public func ecs_query_var_name(
         return EcsThisName.withCString { UnsafePointer(strdup($0)) }
     }
     let impl = flecs_query_impl(q)
-    guard let vars = impl.pointee.vars else { return nil }
-    return vars[Int(var_id)].name
+    let vars = impl.pointee.vars
+    if vars == nil { return nil }
+    return vars![Int(var_id)].name
 }
 
 /// Check if a query variable is an entity variable.
@@ -53,11 +58,11 @@ public func ecs_query_var_is_entity(
     _ var_id: Int32) -> Bool
 {
     let impl = flecs_query_impl(q)
-    guard let vars = impl.pointee.vars else { return false }
-    return vars[Int(var_id)].kind == Int8(ecs_var_kind_t.entity.rawValue)
+    let vars = impl.pointee.vars
+    if vars == nil { return false }
+    return vars![Int(var_id)].kind == Int8(ecs_var_kind_t.entity.rawValue)
 }
 
-// MARK: - Caching Policy
 
 /// Set caching policy based on query descriptor and term analysis.
 private func flecs_query_set_caching_policy(
@@ -111,7 +116,6 @@ private func flecs_query_set_caching_policy(
     return 0
 }
 
-// MARK: - Array Management
 
 /// Copy query term/size/id arrays.
 public func flecs_query_copy_arrays(
@@ -120,21 +124,21 @@ public func flecs_query_copy_arrays(
     let count = Int(q.pointee.term_count)
     if count == 0 { return }
 
-    if let terms = q.pointee.terms {
-        let copy = UnsafeMutablePointer<ecs_term_t>.allocate(capacity: count)
-        copy.update(from: terms, count: count)
+    if q.pointee.terms != nil {
+        let copy = ecs_os_calloc_n(ecs_term_t.self, Int32(count))!
+        copy.update(from: q.pointee.terms!, count: count)
         q.pointee.terms = copy
     }
 
-    if let sizes = q.pointee.sizes {
-        let copy = UnsafeMutablePointer<ecs_size_t>.allocate(capacity: count)
-        copy.update(from: sizes, count: count)
+    if q.pointee.sizes != nil {
+        let copy = ecs_os_calloc_n(ecs_size_t.self, Int32(count))!
+        copy.update(from: q.pointee.sizes!, count: count)
         q.pointee.sizes = copy
     }
 
-    if let ids = q.pointee.ids {
-        let copy = UnsafeMutablePointer<ecs_id_t>.allocate(capacity: count)
-        copy.update(from: ids, count: count)
+    if q.pointee.ids != nil {
+        let copy = ecs_os_calloc_n(ecs_id_t.self, Int32(count))!
+        copy.update(from: q.pointee.ids!, count: count)
         q.pointee.ids = copy
     }
 }
@@ -143,51 +147,53 @@ public func flecs_query_copy_arrays(
 private func flecs_query_free_arrays(
     _ q: UnsafeMutablePointer<ecs_query_t>)
 {
-    q.pointee.terms?.deallocate()
-    q.pointee.sizes?.deallocate()
-    q.pointee.ids?.deallocate()
+    if q.pointee.terms != nil { ecs_os_free(UnsafeMutableRawPointer(q.pointee.terms)) }
+    if q.pointee.sizes != nil { ecs_os_free(UnsafeMutableRawPointer(q.pointee.sizes)) }
+    if q.pointee.ids != nil { ecs_os_free(UnsafeMutableRawPointer(q.pointee.ids)) }
 }
 
-// MARK: - Query Fini (Internal)
 
 /// Internal query finalization.
 private func flecs_query_fini_impl(
     _ impl: UnsafeMutablePointer<ecs_query_impl_t>)
 {
-    if let ctx_free = impl.pointee.ctx_free {
-        ctx_free(impl.pointee.pub.ctx)
+    let ctx_free = impl.pointee.ctx_free
+    if ctx_free != nil {
+        ctx_free!(impl.pointee.pub.ctx)
     }
-    if let binding_ctx_free = impl.pointee.binding_ctx_free {
-        binding_ctx_free(impl.pointee.pub.binding_ctx)
+    let binding_ctx_free = impl.pointee.binding_ctx_free
+    if binding_ctx_free != nil {
+        binding_ctx_free!(impl.pointee.pub.binding_ctx)
     }
 
     // Free variables
     if impl.pointee.vars != nil {
-        impl.pointee.vars?.deallocate()
+        ecs_os_free(UnsafeMutableRawPointer(impl.pointee.vars))
         flecs_name_index_fini(&impl.pointee.tvar_index)
         flecs_name_index_fini(&impl.pointee.evar_index)
     }
 
     // Free ops
-    impl.pointee.ops?.deallocate()
-    impl.pointee.src_vars?.deallocate()
-    impl.pointee.monitor?.deallocate()
+    if impl.pointee.ops != nil { ecs_os_free(UnsafeMutableRawPointer(impl.pointee.ops)) }
+    if impl.pointee.src_vars != nil { ecs_os_free(UnsafeMutableRawPointer(impl.pointee.src_vars)) }
+    if impl.pointee.monitor != nil { ecs_os_free(UnsafeMutableRawPointer(impl.pointee.monitor)) }
 
     // Unlock component records
     let q = withUnsafeMutablePointer(to: &impl.pointee.pub) { $0 }
     if (q.pointee.flags & EcsQueryValid) != 0 {
         let count = Int(q.pointee.term_count)
-        if let terms = q.pointee.terms {
+        let terms = q.pointee.terms
+        if terms != nil {
             for i in 0..<count {
-                if !ecs_term_match_0(&terms[i]) {
-                    flecs_component_unlock(q.pointee.real_world, terms[i].id)
+                if !ecs_term_match_0(&terms![i]) {
+                    flecs_component_unlock(q.pointee.real_world, terms![i].id)
                 }
             }
         }
     }
 
     // Free tokens
-    impl.pointee.tokens?.deallocate()
+    if impl.pointee.tokens != nil { ecs_os_free(UnsafeMutableRawPointer(impl.pointee.tokens)) }
 
     // Free cache
     if impl.pointee.cache != nil {
@@ -196,21 +202,20 @@ private func flecs_query_fini_impl(
 
     flecs_query_free_arrays(q)
     flecs_poly_fini(UnsafeMutableRawPointer(impl), ecs_query_t_magic)
-    impl.deallocate()
+    ecs_os_free(UnsafeMutableRawPointer(impl))
 }
 
-// MARK: - Query Public API
 
 /// Destroy a query.
 public func ecs_query_fini(
     _ q: UnsafeMutablePointer<ecs_query_t>?)
 {
-    guard let q = q else { return }
+    if q == nil { return }
 
-    if q.pointee.entity != 0 {
-        ecs_delete(q.pointee.world, q.pointee.entity)
+    if q!.pointee.entity != 0 {
+        ecs_delete(q!.pointee.world, q!.pointee.entity)
     } else {
-        flecs_query_fini_impl(flecs_query_impl(UnsafePointer(q)))
+        flecs_query_fini_impl(flecs_query_impl(UnsafePointer(q!)))
     }
 }
 
@@ -222,8 +227,8 @@ public func ecs_query_init(
     let world_arg = world
     let stage = flecs_stage_from_world(world)
 
-    let impl = UnsafeMutablePointer<ecs_query_impl_t>.allocate(capacity: 1)
-    impl.initialize(to: ecs_query_impl_t())
+    let impl = ecs_os_calloc_t(ecs_query_impl_t.self)!
+    impl.pointee = ecs_query_impl_t()
     flecs_poly_init(UnsafeMutableRawPointer(impl), ecs_query_t_magic,
         Int32(MemoryLayout<ecs_query_impl_t>.stride), nil)
 
@@ -264,9 +269,9 @@ public func ecs_query_init(
     impl.pointee.ctx_free = const_desc.pointee.ctx_free
     impl.pointee.binding_ctx_free = const_desc.pointee.binding_ctx_free
     impl.pointee.dtor = { ptr in
-        guard let ptr = ptr else { return }
+        if ptr == nil { return }
         flecs_query_fini_impl(
-            ptr.bindMemory(to: ecs_query_impl_t.self, capacity: 1))
+            ptr!.bindMemory(to: ecs_query_impl_t.self, capacity: 1))
     }
     impl.pointee.cache = nil
 
@@ -287,8 +292,9 @@ public func ecs_query_init(
     // Bind to entity if present
     let result_entity = impl.pointee.pub.entity
     if result_entity != 0 {
-        if let poly = flecs_poly_bind_(world, result_entity, EcsQuery) {
-            poly.pointee.poly = UnsafeMutableRawPointer(impl)
+        let poly = flecs_poly_bind_(world, result_entity, EcsQuery)
+        if poly != nil {
+            poly!.pointee.poly = UnsafeMutableRawPointer(impl)
             flecs_poly_modified_(world, result_entity, EcsQuery)
         }
     }
@@ -300,18 +306,18 @@ public func ecs_query_init(
 private func flecs_query_add_self_ref(
     _ q: UnsafeMutablePointer<ecs_query_t>)
 {
-    guard q.pointee.entity != 0 else { return }
-    guard let terms = q.pointee.terms else { return }
+    if q.pointee.entity == 0 { return }
+    let terms = q.pointee.terms
+    if terms == nil { return }
     let count = Int(q.pointee.term_count)
 
     for t in 0..<count {
-        if ECS_TERM_REF_ID(&terms[t].src) == q.pointee.entity {
-            ecs_add_id(q.pointee.world, q.pointee.entity, terms[t].id)
+        if ECS_TERM_REF_ID(&terms![t].src) == q.pointee.entity {
+            ecs_add_id(q.pointee.world, q.pointee.entity, terms![t].id)
         }
     }
 }
 
-// MARK: - Query Has
 
 /// Check if a query matches an entity.
 public func ecs_query_has(
@@ -319,7 +325,7 @@ public func ecs_query_has(
     _ entity: ecs_entity_t,
     _ it: UnsafeMutablePointer<ecs_iter_t>) -> Bool
 {
-    guard (q.pointee.flags & EcsQueryMatchThis) != 0 else { return false }
+    if (q.pointee.flags & EcsQueryMatchThis) == 0 { return false }
 
     it.pointee = ecs_query_iter(q.pointee.world, q)
     ecs_iter_set_var(it, 0, entity)
@@ -332,7 +338,7 @@ public func ecs_query_has_table(
     _ table: UnsafeMutablePointer<ecs_table_t>,
     _ it: UnsafeMutablePointer<ecs_iter_t>) -> Bool
 {
-    guard (q.pointee.flags & EcsQueryMatchThis) != 0 else { return false }
+    if (q.pointee.flags & EcsQueryMatchThis) == 0 { return false }
 
     it.pointee = ecs_query_iter(q.pointee.world, q)
     ecs_iter_set_var_as_table(it, 0, table)
@@ -354,7 +360,6 @@ public func ecs_query_has_range(
     return ecs_query_next(it)
 }
 
-// MARK: - Query Counting
 
 /// Count the number of results, entities, and tables matched by a query.
 public func ecs_query_count(
@@ -393,23 +398,24 @@ public func ecs_query_match_count(
     _ q: UnsafePointer<ecs_query_t>) -> Int32
 {
     let impl = flecs_query_impl(q)
-    guard impl.pointee.cache != nil else { return 0 }
+    if impl.pointee.cache == nil { return 0 }
     // Would return impl->cache->match_count
     return 0
 }
 
-// MARK: - Query Getters
 
 /// Get a query from an entity.
 public func ecs_query_get(
     _ world: UnsafePointer<ecs_world_t>,
     _ query: ecs_entity_t) -> UnsafePointer<ecs_query_t>?
 {
-    guard let poly = ecs_get_pair(world, query, EcsPoly.self, EcsQuery) else {
+    let poly = ecs_get_pair(world, query, EcsPoly.self, EcsQuery)
+    if poly == nil {
         return nil
     }
-    guard let p = poly.pointee.poly else { return nil }
-    return UnsafePointer(p.bindMemory(to: ecs_query_t.self, capacity: 1))
+    let p = poly!.pointee.poly
+    if p == nil { return nil }
+    return UnsafePointer(p!.bindMemory(to: ecs_query_t.self, capacity: 1))
 }
 
 /// Get the cache query of a cached query.
@@ -417,12 +423,11 @@ public func ecs_query_get_cache_query(
     _ q: UnsafePointer<ecs_query_t>) -> UnsafePointer<ecs_query_t>?
 {
     let impl = flecs_query_impl(q)
-    guard impl.pointee.cache != nil else { return nil }
+    if impl.pointee.cache == nil { return nil }
     // Would return impl->cache->query
     return nil
 }
 
-// MARK: - Iterator Creation
 
 /// Create an iterator for a query (internal, no defer adjustment).
 public func flecs_query_iter(
@@ -452,34 +457,34 @@ public func ecs_query_iter(
 public func ecs_query_next(
     _ it: UnsafeMutablePointer<ecs_iter_t>?) -> Bool
 {
-    guard let it = it else { return false }
-    guard (it.pointee.flags & EcsIterIsValid) != 0 else { return false }
+    if it == nil { return false }
+    if (it!.pointee.flags & EcsIterIsValid) == 0 { return false }
 
     // Full query iteration requires the compiled query program execution.
     // The query engine evaluates operations (And, Or, Not, Up, etc.)
     // to find matching tables and populate iterator fields.
     // This is handled by flecs_query_run/flecs_query_next_instanced.
 
-    it.pointee.flags &= ~EcsIterIsValid
+    it!.pointee.flags &= ~EcsIterIsValid
     return false
 }
 
-// MARK: - Query String
 
 /// Get string representation of a query.
 public func ecs_query_str(
     _ query: UnsafePointer<ecs_query_t>) -> UnsafeMutablePointer<CChar>?
 {
     let world = query.pointee.world
-    guard let terms = query.pointee.terms else { return nil }
+    let terms = query.pointee.terms
+    if terms == nil { return nil }
     let count = Int(query.pointee.term_count)
 
     var buf = ecs_strbuf_t()
     for i in 0..<count {
-        flecs_term_to_buf(world, &terms[i], &buf, Int32(i))
+        flecs_term_to_buf(world, &terms![i], &buf, Int32(i))
 
         if i != count - 1 {
-            if terms[i].oper == EcsOr {
+            if terms![i].oper == EcsOr {
                 ecs_strbuf_appendstr(&buf, " || ")
             } else {
                 ecs_strbuf_appendstr(&buf, ", ")
@@ -504,13 +509,14 @@ public func ecs_query_plan_w_profile(
 {
     var buf = ecs_strbuf_t()
     let impl = flecs_query_impl(q)
-    guard let ops = impl.pointee.ops else {
+    let ops = impl.pointee.ops
+    if ops == nil {
         return ecs_strbuf_get(&buf)
     }
 
     let count = impl.pointee.op_count
     for i in 0..<Int(count) {
-        let op = ops[i]
+        let op = ops![i]
         let kind_str = flecs_query_op_str(UInt16(op.kind))
         ecs_strbuf_append(&buf, "%2d. %s\n", Int32(i), kind_str)
     }
@@ -518,7 +524,6 @@ public func ecs_query_plan_w_profile(
     return ecs_strbuf_get(&buf)
 }
 
-// MARK: - Iterator Helpers
 
 /// Apply query flags to iterator.
 public func flecs_query_apply_iter_flags(

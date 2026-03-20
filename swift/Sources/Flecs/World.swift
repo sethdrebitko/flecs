@@ -1,15 +1,20 @@
 // World.swift - 1:1 translation of flecs world.c
 // World creation, management, and destruction
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - World Creation
 
 /// Create a new world
 public func ecs_init() -> UnsafeMutablePointer<ecs_world_t> {
     ecs_os_set_api_defaults()
 
-    let world = UnsafeMutablePointer<ecs_world_t>.allocate(capacity: 1)
+    let world = ecs_os_calloc_t(ecs_world_t.self)!
     world.pointee = ecs_world_t()
 
     // Set magic number
@@ -33,19 +38,14 @@ public func ecs_init() -> UnsafeMutablePointer<ecs_world_t> {
     ecs_map_init(&world.pointee.prefab_child_indices, &world.pointee.allocator)
 
     // Initialize id_index_lo
-    world.pointee.id_index_lo = UnsafeMutablePointer<UnsafeMutablePointer<ecs_component_record_t>?>
-        .allocate(capacity: Int(FLECS_HI_ID_RECORD_ID))
-    world.pointee.id_index_lo!.initialize(repeating: nil, count: Int(FLECS_HI_ID_RECORD_ID))
+    world.pointee.id_index_lo = ecs_os_calloc_n(UnsafeMutablePointer<ecs_component_record_t>?.self, FLECS_HI_ID_RECORD_ID)
 
     // Allocate fixed-size arrays
-    world.pointee.table_version = UnsafeMutablePointer<UInt32>.allocate(capacity: ECS_TABLE_VERSION_ARRAY_SIZE)
-    world.pointee.table_version!.initialize(repeating: 0, count: ECS_TABLE_VERSION_ARRAY_SIZE)
+    world.pointee.table_version = ecs_os_calloc_n(UInt32.self, Int32(ECS_TABLE_VERSION_ARRAY_SIZE))
 
-    world.pointee.non_trivial_lookup = UnsafeMutablePointer<ecs_flags8_t>.allocate(capacity: Int(FLECS_HI_COMPONENT_ID))
-    world.pointee.non_trivial_lookup!.initialize(repeating: 0, count: Int(FLECS_HI_COMPONENT_ID))
+    world.pointee.non_trivial_lookup = ecs_os_calloc_n(ecs_flags8_t.self, FLECS_HI_COMPONENT_ID)
 
-    world.pointee.non_trivial_set = UnsafeMutablePointer<ecs_flags8_t>.allocate(capacity: Int(FLECS_HI_COMPONENT_ID))
-    world.pointee.non_trivial_set!.initialize(repeating: 0, count: Int(FLECS_HI_COMPONENT_ID))
+    world.pointee.non_trivial_set = ecs_os_calloc_n(ecs_flags8_t.self, FLECS_HI_COMPONENT_ID)
 
     // Initialize observable
     flecs_observable_init(&world.pointee.observable)
@@ -70,9 +70,8 @@ public func ecs_init() -> UnsafeMutablePointer<ecs_world_t> {
 
     // Initialize stage
     world.pointee.stage_count = 1
-    world.pointee.stages = UnsafeMutablePointer<UnsafeMutablePointer<ecs_stage_t>?>
-        .allocate(capacity: 1)
-    let stage = UnsafeMutablePointer<ecs_stage_t>.allocate(capacity: 1)
+    world.pointee.stages = ecs_os_calloc_t(UnsafeMutablePointer<ecs_stage_t>?.self)!
+    let stage = ecs_os_calloc_t(ecs_stage_t.self)!
     stage.pointee = ecs_stage_t()
     stage.pointee.hdr.type = ecs_stage_t_magic
     stage.pointee.id = 0
@@ -150,7 +149,6 @@ private func flecs_world_allocators_init(
     ecs_vec_init(nil, &a.pointee.diff_builder.removed, idSize, 0)
 }
 
-// MARK: - World Destruction
 
 /// Destroy the world and free all resources
 public func ecs_fini(
@@ -171,14 +169,14 @@ public func ecs_fini(
     ecs_vec_fini(nil, &world.pointee.fini_actions, actionSize)
 
     // Clean up stages
-    if let stages = world.pointee.stages {
+    if world.pointee.stages != nil {
         for i in 0..<Int(world.pointee.stage_count) {
-            if let stage = stages[i] {
-                flecs_stage_fini(stage)
-                stage.deallocate()
+            if world.pointee.stages![i] != nil {
+                flecs_stage_fini(world.pointee.stages![i]!)
+                ecs_os_free(UnsafeMutableRawPointer(world.pointee.stages![i]!))
             }
         }
-        stages.deallocate()
+        ecs_os_free(UnsafeMutableRawPointer(world.pointee.stages!))
     }
 
     // Free observable
@@ -197,29 +195,29 @@ public func ecs_fini(
     flecs_sparse_fini(&world.pointee.store.tables)
 
     // Free id_index_lo
-    if let lo = world.pointee.id_index_lo {
+    if world.pointee.id_index_lo != nil {
         // Free individual component records
         for i in 0..<Int(FLECS_HI_ID_RECORD_ID) {
-            if let cr = lo[i] {
-                cr.deallocate()
+            if world.pointee.id_index_lo![i] != nil {
+                ecs_os_free(UnsafeMutableRawPointer(world.pointee.id_index_lo![i]!))
             }
         }
-        lo.deinitialize(count: Int(FLECS_HI_ID_RECORD_ID))
-        lo.deallocate()
+        world.pointee.id_index_lo!.deinitialize(count: Int(FLECS_HI_ID_RECORD_ID))
+        ecs_os_free(UnsafeMutableRawPointer(world.pointee.id_index_lo!))
     }
 
     // Free fixed arrays
-    if let tv = world.pointee.table_version {
-        tv.deinitialize(count: ECS_TABLE_VERSION_ARRAY_SIZE)
-        tv.deallocate()
+    if world.pointee.table_version != nil {
+        world.pointee.table_version!.deinitialize(count: ECS_TABLE_VERSION_ARRAY_SIZE)
+        ecs_os_free(UnsafeMutableRawPointer(world.pointee.table_version!))
     }
-    if let ntl = world.pointee.non_trivial_lookup {
-        ntl.deinitialize(count: Int(FLECS_HI_COMPONENT_ID))
-        ntl.deallocate()
+    if world.pointee.non_trivial_lookup != nil {
+        world.pointee.non_trivial_lookup!.deinitialize(count: Int(FLECS_HI_COMPONENT_ID))
+        ecs_os_free(UnsafeMutableRawPointer(world.pointee.non_trivial_lookup!))
     }
-    if let nts = world.pointee.non_trivial_set {
-        nts.deinitialize(count: Int(FLECS_HI_COMPONENT_ID))
-        nts.deallocate()
+    if world.pointee.non_trivial_set != nil {
+        world.pointee.non_trivial_set!.deinitialize(count: Int(FLECS_HI_COMPONENT_ID))
+        ecs_os_free(UnsafeMutableRawPointer(world.pointee.non_trivial_set!))
     }
 
     // Free hashmaps
@@ -237,14 +235,14 @@ public func ecs_fini(
     flecs_allocator_fini(&world.pointee.allocator)
 
     // Free context
-    if let ctx_free = world.pointee.ctx_free, let ctx = world.pointee.ctx {
-        ctx_free(ctx)
+    if world.pointee.ctx_free != nil && world.pointee.ctx != nil {
+        world.pointee.ctx_free!(world.pointee.ctx!)
     }
-    if let binding_ctx_free = world.pointee.binding_ctx_free, let ctx = world.pointee.binding_ctx {
-        binding_ctx_free(ctx)
+    if world.pointee.binding_ctx_free != nil && world.pointee.binding_ctx != nil {
+        world.pointee.binding_ctx_free!(world.pointee.binding_ctx!)
     }
 
-    world.deallocate()
+    ecs_os_free(UnsafeMutableRawPointer(world))
 }
 
 private func flecs_stage_fini(
@@ -275,7 +273,6 @@ private func flecs_world_allocators_fini(
     ecs_vec_fini(nil, &a.pointee.diff_builder.removed, idSize)
 }
 
-// MARK: - World API
 
 /// Check if world is valid
 public func ecs_is_fini(
@@ -382,10 +379,11 @@ public func ecs_readonly_end(
 public func ecs_defer_begin(
     _ world: UnsafeMutableRawPointer?
 ) -> Bool {
-    guard let world = world else { return false }
-    let w = world.assumingMemoryBound(to: ecs_world_t.self)
+    if world == nil { return false }
+    let w = world!.assumingMemoryBound(to: ecs_world_t.self)
 
-    guard let stages = w.pointee.stages, let stage = stages[0] else { return false }
+    if w.pointee.stages == nil || w.pointee.stages![0] == nil { return false }
+    let stage = w.pointee.stages![0]!
 
     stage.pointee.defer += 1
     return stage.pointee.defer > 1
@@ -395,10 +393,11 @@ public func ecs_defer_begin(
 public func ecs_defer_end(
     _ world: UnsafeMutableRawPointer?
 ) -> Bool {
-    guard let world = world else { return false }
-    let w = world.assumingMemoryBound(to: ecs_world_t.self)
+    if world == nil { return false }
+    let w = world!.assumingMemoryBound(to: ecs_world_t.self)
 
-    guard let stages = w.pointee.stages, let stage = stages[0] else { return false }
+    if w.pointee.stages == nil || w.pointee.stages![0] == nil { return false }
+    let stage = w.pointee.stages![0]!
 
     stage.pointee.defer -= 1
 
@@ -427,10 +426,10 @@ public func ecs_atfini(
 public func ecs_get_scope(
     _ world: UnsafeRawPointer?
 ) -> ecs_entity_t {
-    guard let world = world else { return 0 }
-    let w = world.assumingMemoryBound(to: ecs_world_t.self)
-    guard let stages = w.pointee.stages, let stage = stages[0] else { return 0 }
-    return stage.pointee.scope
+    if world == nil { return 0 }
+    let w = world!.assumingMemoryBound(to: ecs_world_t.self)
+    if w.pointee.stages == nil || w.pointee.stages![0] == nil { return 0 }
+    return w.pointee.stages![0]!.pointee.scope
 }
 
 /// Set the scope of the world
@@ -438,9 +437,10 @@ public func ecs_set_scope(
     _ world: UnsafeMutableRawPointer?,
     _ scope: ecs_entity_t
 ) -> ecs_entity_t {
-    guard let world = world else { return 0 }
-    let w = world.assumingMemoryBound(to: ecs_world_t.self)
-    guard let stages = w.pointee.stages, let stage = stages[0] else { return 0 }
+    if world == nil { return 0 }
+    let w = world!.assumingMemoryBound(to: ecs_world_t.self)
+    if w.pointee.stages == nil || w.pointee.stages![0] == nil { return 0 }
+    let stage = w.pointee.stages![0]!
     let old = stage.pointee.scope
     stage.pointee.scope = scope
     return old
@@ -453,14 +453,13 @@ public func ecs_count(
     return flecs_entity_index_count(&world.pointee.store.entity_index)
 }
 
-// MARK: - Poly helpers
 
 /// Validate that a poly object has the correct type
 public func ecs_poly_is(
     _ poly: UnsafeRawPointer?,
     _ type: Int32
 ) -> Bool {
-    guard let poly = poly else { return false }
-    let hdr = poly.assumingMemoryBound(to: ecs_header_t.self)
+    if poly == nil { return false }
+    let hdr = poly!.assumingMemoryBound(to: ecs_header_t.self)
     return hdr.pointee.type == type
 }

@@ -1,7 +1,6 @@
 // TableCache.swift
 // Translation of flecs/src/storage/table_cache.c
 
-// MARK: - Private helpers
 
 /// Read the `id` field from an ecs_table_t raw pointer.
 /// ecs_table_t layout: first field is `uint64_t id` at offset 0.
@@ -29,7 +28,6 @@ private func flecs_table_data_count(_ table: UnsafeMutableRawPointer) -> Int32 {
     return table.load(fromByteOffset: 72, as: Int32.self)
 }
 
-// MARK: - Private linked list operations
 
 private func flecs_table_cache_list_remove(
     _ cache: UnsafeMutablePointer<ecs_table_cache_t>,
@@ -38,11 +36,11 @@ private func flecs_table_cache_list_remove(
     let next = elem.pointee.next
     let prev = elem.pointee.prev
 
-    if let next = next {
-        next.pointee.prev = prev
+    if next != nil {
+        next!.pointee.prev = prev
     }
-    if let prev = prev {
-        prev.pointee.next = next
+    if prev != nil {
+        prev!.pointee.next = next
     }
 
     cache.pointee.tables.count -= 1
@@ -69,12 +67,11 @@ private func flecs_table_cache_list_insert(
     elem.pointee.next = nil
     elem.pointee.prev = last
 
-    if let last = last {
-        last.pointee.next = elem
+    if last != nil {
+        last!.pointee.next = elem
     }
 }
 
-// MARK: - Public API
 
 public func ecs_table_cache_init(
     _ world: UnsafeMutableRawPointer?,
@@ -104,8 +101,8 @@ public func ecs_table_cache_insert(
 
     flecs_table_cache_list_insert(cache, result)
 
-    guard let table = table else { return }
-    let tableId = flecs_table_id(table)
+    if table == nil { return }
+    let tableId = flecs_table_id(table!)
     // ecs_map_insert_ptr(&cache->index, table->id, result)
     let ptrVal = ecs_map_val_t(UInt(bitPattern: UnsafeMutableRawPointer(result)))
     ecs_map_insert(&cache.pointee.index, tableId, ptrVal)
@@ -116,25 +113,26 @@ public func ecs_table_cache_replace(
     _ table: UnsafeMutableRawPointer?,
     _ elem: UnsafeMutablePointer<ecs_table_cache_hdr_t>)
 {
-    guard let table = table else { return }
-    let tableId = flecs_table_id(table)
+    if table == nil { return }
+    let tableId = flecs_table_id(table!)
 
     // ecs_map_get_ref -> ecs_map_get, which returns a pointer to the map value
-    guard let r = ecs_map_get(&cache.pointee.index, tableId) else { return }
+    let r = ecs_map_get(&cache.pointee.index, tableId)
+    if r == nil { return }
 
     // old = *r (the pointer stored in the map)
-    let oldRaw = UnsafeMutableRawPointer(bitPattern: UInt(r.pointee))
-    guard let oldPtr = oldRaw else { return }
-    let old = oldPtr.assumingMemoryBound(to: ecs_table_cache_hdr_t.self)
+    let oldRaw = UnsafeMutableRawPointer(bitPattern: UInt(r!.pointee))
+    if oldRaw == nil { return }
+    let old = oldRaw!.assumingMemoryBound(to: ecs_table_cache_hdr_t.self)
 
     let prev = old.pointee.prev
     let next = old.pointee.next
 
-    if let prev = prev {
-        prev.pointee.next = elem
+    if prev != nil {
+        prev!.pointee.next = elem
     }
-    if let next = next {
-        next.pointee.prev = elem
+    if next != nil {
+        next!.pointee.prev = elem
     }
 
     if cache.pointee.tables.first == old {
@@ -145,7 +143,7 @@ public func ecs_table_cache_replace(
     }
 
     // *r = elem
-    r.pointee = ecs_map_val_t(UInt(bitPattern: UnsafeMutableRawPointer(elem)))
+    r!.pointee = ecs_map_val_t(UInt(bitPattern: UnsafeMutableRawPointer(elem)))
     elem.pointee.prev = prev
     elem.pointee.next = next
 }
@@ -165,8 +163,8 @@ public func ecs_table_cache_get(
     _ cache: UnsafePointer<ecs_table_cache_t>,
     _ table: UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer?
 {
-    guard let table = table else { return nil }
-    let tableId = flecs_table_id(table)
+    if table == nil { return nil }
+    let tableId = flecs_table_id(table!)
     // Compute pointer to the index field within the cache struct
     let indexPtr = UnsafeRawPointer(cache).assumingMemoryBound(to: ecs_map_t.self)
     return ecs_map_get_deref_(indexPtr, tableId)
@@ -215,23 +213,22 @@ public func flecs_table_cache_next_(
     _ it: UnsafeMutablePointer<ecs_table_cache_iter_t>) -> UnsafePointer<ecs_table_cache_hdr_t>?
 {
     while true {
-        guard let next = it.pointee.next else {
+        let next = it.pointee.next
+        if next == nil {
             it.pointee.cur = nil
             return nil
         }
 
         it.pointee.cur = next
-        it.pointee.next = next.pointee.next
+        it.pointee.next = next!.pointee.next
 
-        if let table = next.pointee.table {
-            let count = flecs_table_data_count(table)
+        if next!.pointee.table != nil {
+            let count = flecs_table_data_count(next!.pointee.table!)
             if count > 0 {
-                // Table has entities (non-empty / "fill")
                 if !it.pointee.iter_fill {
                     continue
                 }
             } else {
-                // Table is empty
                 if !it.pointee.iter_empty {
                     continue
                 }

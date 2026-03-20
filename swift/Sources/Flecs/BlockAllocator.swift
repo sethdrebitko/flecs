@@ -2,9 +2,14 @@
 /// Translation of ecs_block_allocator_t and its operations from flecs.
 /// Pool allocator that allocates fixed-size chunks from larger blocks.
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Types
 
 /// A block of memory managed by the block allocator.
 public struct ecs_block_allocator_block_t {
@@ -45,11 +50,9 @@ public struct ecs_block_allocator_t {
     }
 }
 
-// MARK: - Internal constants
 
 private let FLECS_MIN_CHUNKS_PER_BLOCK: Int32 = 1
 
-// MARK: - Internal helpers
 
 /// Align a value up to the given alignment.
 @inline(__always)
@@ -92,7 +95,6 @@ private func flecs_balloc_block(
     return first_chunk
 }
 
-// MARK: - Public API
 
 /// Initialize a block allocator.
 public func flecs_ballocator_init(
@@ -116,7 +118,7 @@ public func flecs_ballocator_init(
 public func flecs_ballocator_new(
     _ size: ecs_size_t) -> UnsafeMutablePointer<ecs_block_allocator_t>
 {
-    let result = UnsafeMutablePointer<ecs_block_allocator_t>.allocate(capacity: 1)
+    let result = ecs_os_calloc_t(ecs_block_allocator_t.self)!
     result.pointee = ecs_block_allocator_t()
     flecs_ballocator_init(result, size)
     return result
@@ -127,10 +129,10 @@ public func flecs_ballocator_fini(
     _ ba: UnsafeMutablePointer<ecs_block_allocator_t>)
 {
     var block = ba.pointee.block_head
-    while let b = block {
-        let next = b.pointee.next
+    while block != nil {
+        let next = block!.pointee.next
         // The block was allocated as a single malloc including header + data
-        free(UnsafeMutableRawPointer(b))
+        free(UnsafeMutableRawPointer(block!))
         block = next
     }
     ba.pointee.block_head = nil
@@ -142,7 +144,7 @@ public func flecs_ballocator_free(
     _ ba: UnsafeMutablePointer<ecs_block_allocator_t>)
 {
     flecs_ballocator_fini(ba)
-    ba.deallocate()
+    ecs_os_free(UnsafeMutableRawPointer(ba))
 }
 
 /// Allocate a block of memory from the block allocator.
@@ -150,18 +152,19 @@ public func flecs_ballocator_free(
 public func flecs_balloc(
     _ ba: UnsafeMutablePointer<ecs_block_allocator_t>?) -> UnsafeMutableRawPointer?
 {
-    guard let ba = ba else { return nil }
+    if ba == nil { return nil }
 
-    if ba.pointee.chunks_per_block <= FLECS_MIN_CHUNKS_PER_BLOCK {
-        return malloc(Int(ba.pointee.data_size))
+    if ba!.pointee.chunks_per_block <= FLECS_MIN_CHUNKS_PER_BLOCK {
+        return malloc(Int(ba!.pointee.data_size))
     }
 
-    if ba.pointee.head == nil {
-        ba.pointee.head = flecs_balloc_block(ba)
+    if ba!.pointee.head == nil {
+        ba!.pointee.head = flecs_balloc_block(ba!)
     }
 
-    guard let result = ba.pointee.head else { return nil }
-    ba.pointee.head = result.pointee.next
+    if ba!.pointee.head == nil { return nil }
+    let result = ba!.pointee.head!
+    ba!.pointee.head = result.pointee.next
     return UnsafeMutableRawPointer(result)
 }
 
@@ -170,10 +173,11 @@ public func flecs_balloc(
 public func flecs_bcalloc(
     _ ba: UnsafeMutablePointer<ecs_block_allocator_t>?) -> UnsafeMutableRawPointer?
 {
-    guard let ba = ba else { return nil }
-    guard let result = flecs_balloc(ba) else { return nil }
-    memset(result, 0, Int(ba.pointee.data_size))
-    return result
+    if ba == nil { return nil }
+    let result = flecs_balloc(ba!)
+    if result == nil { return nil }
+    memset(result!, 0, Int(ba!.pointee.data_size))
+    return result!
 }
 
 /// Free a block of memory back to the block allocator.
@@ -181,18 +185,18 @@ public func flecs_bfree(
     _ ba: UnsafeMutablePointer<ecs_block_allocator_t>?,
     _ memory: UnsafeMutableRawPointer?)
 {
-    guard let ba = ba else { return }
-    guard let memory = memory else { return }
+    if ba == nil { return }
+    if memory == nil { return }
 
-    if ba.pointee.chunks_per_block <= FLECS_MIN_CHUNKS_PER_BLOCK {
-        free(memory)
+    if ba!.pointee.chunks_per_block <= FLECS_MIN_CHUNKS_PER_BLOCK {
+        free(memory!)
         return
     }
 
-    let chunk = memory.bindMemory(
+    let chunk = memory!.bindMemory(
         to: ecs_block_allocator_chunk_header_t.self, capacity: 1)
-    chunk.pointee.next = ba.pointee.head
-    ba.pointee.head = chunk
+    chunk.pointee.next = ba!.pointee.head
+    ba!.pointee.head = chunk
 }
 
 /// Reallocate a block from one block allocator to another.
@@ -207,13 +211,13 @@ public func flecs_brealloc(
     }
 
     let result = flecs_balloc(dst)
-    if let result = result, let src = src {
-        var size = src.pointee.data_size
-        if let dst = dst, dst.pointee.data_size < size {
-            size = dst.pointee.data_size
+    if result != nil && src != nil {
+        var size = src!.pointee.data_size
+        if dst != nil && dst!.pointee.data_size < size {
+            size = dst!.pointee.data_size
         }
-        if let memory = memory {
-            memcpy(result, memory, Int(size))
+        if memory != nil {
+            memcpy(result!, memory!, Int(size))
         }
     }
     flecs_bfree(src, memory)
@@ -226,8 +230,9 @@ public func flecs_bdup(
     _ ba: UnsafeMutablePointer<ecs_block_allocator_t>?,
     _ memory: UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer?
 {
-    guard let ba = ba, let memory = memory else { return nil }
-    guard let result = flecs_balloc(ba) else { return nil }
-    memcpy(result, memory, Int(ba.pointee.data_size))
-    return result
+    if ba == nil || memory == nil { return nil }
+    let result = flecs_balloc(ba!)
+    if result == nil { return nil }
+    memcpy(result!, memory!, Int(ba!.pointee.data_size))
+    return result!
 }

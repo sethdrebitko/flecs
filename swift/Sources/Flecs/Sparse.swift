@@ -2,9 +2,14 @@
 /// Translation of ecs_sparse_t and its operations from flecs.
 /// Sparse set data structure with paging for O(1) access with stable pointers.
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Constants
 
 // FLECS_SPARSE_PAGE_BITS defined in Types.swift
 public let FLECS_SPARSE_PAGE_SIZE: Int32 = 1 << FLECS_SPARSE_PAGE_BITS  // 64
@@ -19,7 +24,6 @@ public func FLECS_SPARSE_OFFSET(_ index: UInt64) -> Int32 {
     return Int32(UInt32(truncatingIfNeeded: index) & UInt32(FLECS_SPARSE_PAGE_SIZE - 1))
 }
 
-// MARK: - Types
 
 /// A page in the sparse set containing a sparse-to-dense mapping and data.
 public struct ecs_sparse_page_t {
@@ -53,7 +57,6 @@ public struct ecs_sparse_t {
     }
 }
 
-// MARK: - Internal helpers
 
 private let sparsePageSize = Int32(MemoryLayout<ecs_sparse_page_t>.stride)
 private let uint64Size = Int32(MemoryLayout<UInt64>.stride)
@@ -65,8 +68,8 @@ private func SPARSE_DATA(
     _ size: ecs_size_t,
     _ offset: Int32) -> UnsafeMutableRawPointer?
 {
-    guard let array = array else { return nil }
-    return array.advanced(by: Int(size) * Int(offset))
+    if array == nil { return nil }
+    return array!.advanced(by: Int(size) * Int(offset))
 }
 
 private func flecs_sparse_page_new(
@@ -91,8 +94,8 @@ private func flecs_sparse_page_new(
     let result = &pages[Int(page_index)]
 
     // Allocate sparse array (int32 * page_size), zero-initialized
-    if let ca = sparse.pointee.page_allocator {
-        result.pointee.sparse = flecs_bcalloc(ca)?.bindMemory(
+    if sparse.pointee.page_allocator != nil {
+        result.pointee.sparse = flecs_bcalloc(sparse.pointee.page_allocator!)?.bindMemory(
             to: Int32.self, capacity: Int(FLECS_SPARSE_PAGE_SIZE))
     } else {
         result.pointee.sparse = calloc(Int(FLECS_SPARSE_PAGE_SIZE), MemoryLayout<Int32>.size)?
@@ -114,8 +117,8 @@ private func flecs_sparse_page_free(
     _ sparse: UnsafeMutablePointer<ecs_sparse_t>,
     _ page: UnsafeMutablePointer<ecs_sparse_page_t>)
 {
-    if let ca = sparse.pointee.page_allocator {
-        flecs_bfree(ca, UnsafeMutableRawPointer(page.pointee.sparse))
+    if sparse.pointee.page_allocator != nil {
+        flecs_bfree(sparse.pointee.page_allocator!, UnsafeMutableRawPointer(page.pointee.sparse))
     } else {
         free(page.pointee.sparse)
     }
@@ -136,19 +139,20 @@ private func flecs_sparse_get_page(
     if page_index >= ecs_vec_count(&sparse_mut.pointee.pages) {
         return nil
     }
-    guard let raw = ecs_vec_get(&sparse_mut.pointee.pages, sparsePageSize, page_index) else {
+    let raw = ecs_vec_get(&sparse_mut.pointee.pages, sparsePageSize, page_index)
+    if raw == nil {
         return nil
     }
-    return raw.bindMemory(to: ecs_sparse_page_t.self, capacity: 1)
+    return raw!.bindMemory(to: ecs_sparse_page_t.self, capacity: 1)
 }
 
 private func flecs_sparse_get_or_create_page(
     _ sparse: UnsafeMutablePointer<ecs_sparse_t>,
     _ page_index: Int32) -> UnsafeMutablePointer<ecs_sparse_page_t>
 {
-    if let page = flecs_sparse_get_page(UnsafePointer(sparse), page_index),
-       page.pointee.sparse != nil {
-        return page
+    let page = flecs_sparse_get_page(UnsafePointer(sparse), page_index)
+    if page != nil && page!.pointee.sparse != nil {
+        return page!
     }
     return flecs_sparse_page_new(sparse, page_index)
 }
@@ -230,14 +234,15 @@ private func flecs_sparse_get_sparse(
     _ id: UInt64) -> UnsafeMutableRawPointer?
 {
     let index = UInt64(UInt32(truncatingIfNeeded: id))
-    guard let page = flecs_sparse_get_page(sparse, FLECS_SPARSE_PAGE(index)) else {
+    let page = flecs_sparse_get_page(sparse, FLECS_SPARSE_PAGE(index))
+    if page == nil {
         return nil
     }
-    guard page.pointee.sparse != nil else {
+    if page!.pointee.sparse == nil {
         return nil
     }
     let offset = FLECS_SPARSE_OFFSET(index)
-    return SPARSE_DATA(page.pointee.data, sparse.pointee.size, offset)
+    return SPARSE_DATA(page!.pointee.data, sparse.pointee.size, offset)
 }
 
 private func flecs_sparse_swap_dense(
@@ -255,7 +260,6 @@ private func flecs_sparse_swap_dense(
     flecs_sparse_assign_index(page_b, dense_array, id_b, a)
 }
 
-// MARK: - Public internal API (flecs_ prefix)
 
 public func flecs_sparse_init(
     _ result: UnsafeMutablePointer<ecs_sparse_t>,
@@ -305,8 +309,8 @@ public func flecs_sparse_clear(
         let pages = ecs_vec_first(&sparse.pointee.pages)!
             .bindMemory(to: ecs_sparse_page_t.self, capacity: Int(count))
         for i in 0..<Int(count) {
-            if let indices = pages[i].sparse {
-                memset(indices, 0, Int(FLECS_SPARSE_PAGE_SIZE) * MemoryLayout<Int32>.size)
+            if pages[i].sparse != nil {
+                memset(pages[i].sparse!, 0, Int(FLECS_SPARSE_PAGE_SIZE) * MemoryLayout<Int32>.size)
             }
         }
     }
@@ -334,8 +338,9 @@ public func flecs_sparse_add(
 public func flecs_sparse_last_id(
     _ sparse: UnsafePointer<ecs_sparse_t>) -> UInt64
 {
-    guard let dense_array = sparse_dense_ptr_const(sparse) else { return 0 }
-    return dense_array[Int(sparse.pointee.count - 1)]
+    let dense_array = sparse_dense_ptr_const(sparse)
+    if dense_array == nil { return 0 }
+    return dense_array![Int(sparse.pointee.count - 1)]
 }
 
 public func flecs_sparse_insert(
@@ -428,29 +433,31 @@ public func flecs_sparse_remove(
     _ size: ecs_size_t,
     _ id: UInt64) -> Bool
 {
-    guard let page = flecs_sparse_get_page(UnsafePointer(sparse), FLECS_SPARSE_PAGE(id)) else {
+    let page = flecs_sparse_get_page(UnsafePointer(sparse), FLECS_SPARSE_PAGE(id))
+    if page == nil {
         return false
     }
-    guard page.pointee.sparse != nil else {
+    if page!.pointee.sparse == nil {
         return false
     }
 
     let index = UInt64(UInt32(truncatingIfNeeded: id))
     let offset = FLECS_SPARSE_OFFSET(index)
-    let dense = page.pointee.sparse![Int(offset)]
+    let dense = page!.pointee.sparse![Int(offset)]
 
     if dense != 0 {
         let count = sparse.pointee.count
         if dense == (count - 1) {
             sparse.pointee.count -= 1
         } else if dense < count {
-            flecs_sparse_swap_dense(sparse, page, dense, count - 1)
+            flecs_sparse_swap_dense(sparse, page!, dense, count - 1)
             sparse.pointee.count -= 1
         }
 
         if sparse.pointee.size > 0 {
-            if let ptr = SPARSE_DATA(page.pointee.data, sparse.pointee.size, offset) {
-                memset(ptr, 0, Int(size))
+            let ptr = SPARSE_DATA(page!.pointee.data, sparse.pointee.size, offset)
+            if ptr != nil {
+                memset(ptr!, 0, Int(size))
             }
         }
 
@@ -464,15 +471,16 @@ public func flecs_sparse_is_alive(
     _ sparse: UnsafePointer<ecs_sparse_t>,
     _ id: UInt64) -> Bool
 {
-    guard let page = flecs_sparse_get_page(sparse, FLECS_SPARSE_PAGE(id)) else {
+    let page = flecs_sparse_get_page(sparse, FLECS_SPARSE_PAGE(id))
+    if page == nil {
         return false
     }
-    guard page.pointee.sparse != nil else {
+    if page!.pointee.sparse == nil {
         return false
     }
 
     let offset = FLECS_SPARSE_OFFSET(id)
-    let dense = page.pointee.sparse![Int(offset)]
+    let dense = page!.pointee.sparse![Int(offset)]
     if dense == 0 || dense >= sparse.pointee.count {
         return false
     }
@@ -485,17 +493,18 @@ public func flecs_sparse_get_dense(
     _ dense_index: Int32) -> UnsafeMutableRawPointer?
 {
     let di = dense_index + 1
-    guard let dense_array = sparse_dense_ptr_const(sparse) else { return nil }
-    return flecs_sparse_get_sparse(sparse, di, dense_array[Int(di)])
+    let dense_array = sparse_dense_ptr_const(sparse)
+    if dense_array == nil { return nil }
+    return flecs_sparse_get_sparse(sparse, di, dense_array![Int(di)])
 }
 
 public func flecs_sparse_count(
     _ sparse: UnsafePointer<ecs_sparse_t>?) -> Int32
 {
-    guard let sparse = sparse, sparse.pointee.count > 0 else {
+    if sparse == nil || sparse!.pointee.count <= 0 {
         return 0
     }
-    return sparse.pointee.count - 1
+    return sparse!.pointee.count - 1
 }
 
 public func flecs_sparse_get(
@@ -504,34 +513,35 @@ public func flecs_sparse_get(
     _ id: UInt64) -> UnsafeMutableRawPointer?
 {
     let index = UInt64(UInt32(truncatingIfNeeded: id))
-    guard let page = flecs_sparse_get_page(sparse, FLECS_SPARSE_PAGE(index)) else {
+    let page = flecs_sparse_get_page(sparse, FLECS_SPARSE_PAGE(index))
+    if page == nil {
         return nil
     }
-    guard page.pointee.sparse != nil else {
+    if page!.pointee.sparse == nil {
         return nil
     }
 
     let offset = FLECS_SPARSE_OFFSET(index)
-    let dense = page.pointee.sparse![Int(offset)]
+    let dense = page!.pointee.sparse![Int(offset)]
     let in_use = dense != 0 && dense < sparse.pointee.count
     if !in_use {
         return nil
     }
 
-    return SPARSE_DATA(page.pointee.data, sparse.pointee.size, offset)
+    return SPARSE_DATA(page!.pointee.data, sparse.pointee.size, offset)
 }
 
 public func flecs_sparse_ids(
     _ sparse: UnsafePointer<ecs_sparse_t>) -> UnsafePointer<UInt64>?
 {
     let m = UnsafeMutablePointer(mutating: sparse)
-    guard let arr = ecs_vec_first(&m.pointee.dense) else { return nil }
-    let typed = arr.bindMemory(to: UInt64.self,
+    let arr = ecs_vec_first(&m.pointee.dense)
+    if arr == nil { return nil }
+    let typed = arr!.bindMemory(to: UInt64.self,
         capacity: Int(ecs_vec_count(&m.pointee.dense)))
     return UnsafePointer(typed.advanced(by: 1))
 }
 
-// MARK: - Public API (ecs_ prefix)
 
 public func ecs_sparse_init(
     _ sparse: UnsafeMutablePointer<ecs_sparse_t>,

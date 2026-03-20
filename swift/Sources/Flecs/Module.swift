@@ -1,9 +1,14 @@
 // Module.swift - 1:1 translation of flecs addons/module.c
 // Module import and initialization
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Module Path
 
 /// Convert a C module name (e.g. "FlecsSystem") to a flecs path ("flecs.system").
 public func flecs_module_path_from_c(
@@ -29,7 +34,6 @@ public func flecs_module_path_from_c(
     return ecs_strbuf_get(&buf)
 }
 
-// MARK: - Module Import
 
 /// Import a module into the world. If already imported, returns existing entity.
 public func ecs_import(
@@ -40,9 +44,9 @@ public func ecs_import(
     let old_scope = ecs_set_scope(world, 0)
     let old_name_prefix = world.pointee.info.name_prefix
 
-    guard let path = flecs_module_path_from_c(module_name) else { return 0 }
-    var e = ecs_lookup(world, path)
-    ecs_os_free(UnsafeMutableRawPointer(path))
+    let path = flecs_module_path_from_c(module_name); if path == nil { return 0 }
+    var e = ecs_lookup(world, path!)
+    ecs_os_free(UnsafeMutableRawPointer(path!))
 
     if e == 0 {
         // Load module
@@ -65,13 +69,12 @@ public func ecs_import_c(
     _ module: @convention(c) (UnsafeMutablePointer<ecs_world_t>) -> Void,
     _ c_name: UnsafePointer<CChar>) -> ecs_entity_t
 {
-    guard let name = flecs_module_path_from_c(c_name) else { return 0 }
-    let e = ecs_import(world, module, name)
-    ecs_os_free(UnsafeMutableRawPointer(name))
+    let name = flecs_module_path_from_c(c_name); if name == nil { return 0 }
+    let e = ecs_import(world, module, name!)
+    ecs_os_free(UnsafeMutableRawPointer(name!))
     return e
 }
 
-// MARK: - Module Init
 
 /// Initialize a module entity with optional component data.
 public func ecs_module_init(
@@ -83,10 +86,10 @@ public func ecs_module_init(
 
     var e = desc.pointee.entity
     if e == 0 {
-        guard let module_path = flecs_module_path_from_c(c_name) else { return 0 }
-        e = ecs_new_entity(world, module_path)
-        ecs_set_symbol(world, e, module_path)
-        ecs_os_free(UnsafeMutableRawPointer(module_path))
+        let module_path = flecs_module_path_from_c(c_name); if module_path == nil { return 0 }
+        e = ecs_new_entity(world, module_path!)
+        ecs_set_symbol(world, e, module_path!)
+        ecs_os_free(UnsafeMutableRawPointer(module_path!))
     }
 
     ecs_add_id(world, e, EcsModule)

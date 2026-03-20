@@ -1,9 +1,14 @@
 // System.swift - 1:1 translation of flecs addons/system/system.c
 // System creation, execution, and lifecycle
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - System Type
 
 /// System implementation (poly object with query + callbacks).
 public struct ecs_system_t {
@@ -37,7 +42,6 @@ public struct ecs_system_t {
     public init() {}
 }
 
-// MARK: - System Descriptor
 
 /// Descriptor for creating a system.
 public struct ecs_system_desc_t {
@@ -61,7 +65,6 @@ public struct ecs_system_desc_t {
     public init() {}
 }
 
-// MARK: - System Execution
 
 /// Run a system with full worker/stage support.
 public func flecs_run_system(
@@ -79,17 +82,18 @@ public func flecs_run_system(
 
     // Check tick source
     if tick_source != 0 {
-        guard let tick = ecs_get(world, tick_source, EcsTickSource.self) else {
+        let tick = ecs_get(world, tick_source, EcsTickSource.self)
+        if tick == nil {
             return 0
         }
-        if !tick.pointee.tick { return 0 }
-        time_elapsed = tick.pointee.time_elapsed
+        if !tick!.pointee.tick { return 0 }
+        time_elapsed = tick!.pointee.time_elapsed
     }
 
     // Create query iterator
     let thread_ctx: UnsafeMutableRawPointer
-    if let stage = stage {
-        thread_ctx = stage.pointee.thread_ctx ?? UnsafeMutableRawPointer(world)
+    if stage != nil {
+        thread_ctx = stage!.pointee.thread_ctx ?? UnsafeMutableRawPointer(world)
     } else {
         thread_ctx = UnsafeMutableRawPointer(world)
     }
@@ -110,14 +114,14 @@ public func flecs_run_system(
     let old_system = flecs_stage_set_system(
         stage ?? world.pointee.stages![0]!, system)
 
-    if let run = system_data.pointee.run {
+    if system_data.pointee.run != nil {
         qit.callback = system_data.pointee.action
         qit.next = flecs_default_next_callback
-        run(&qit)
-    } else if let action = system_data.pointee.action {
-        qit.callback = action
+        system_data.pointee.run!(&qit)
+    } else if system_data.pointee.action != nil {
+        qit.callback = system_data.pointee.action!
         while ecs_query_next(&qit) {
-            action(&qit)
+            system_data.pointee.action!(&qit)
         }
     }
 
@@ -133,14 +137,15 @@ public func ecs_run(
     _ delta_time: ecs_ftime_t,
     _ param: UnsafeMutableRawPointer?) -> ecs_entity_t
 {
-    guard let system_data = flecs_poly_get_(
+    let system_data = flecs_poly_get_(
         UnsafePointer(world), system, EcsSystem)?.bindMemory(
-        to: ecs_system_t.self, capacity: 1) else { return 0 }
+        to: ecs_system_t.self, capacity: 1)
+    if system_data == nil { return 0 }
 
     let stage = flecs_stage_from_world(world)
     flecs_defer_begin(world, stage)
     let result = flecs_run_system(
-        world, stage, system, system_data, 0, 0, delta_time, param)
+        world, stage, system, system_data!, 0, 0, delta_time, param)
     flecs_defer_end(world, stage)
     return result
 }
@@ -154,20 +159,20 @@ public func ecs_run_worker(
     _ delta_time: ecs_ftime_t,
     _ param: UnsafeMutableRawPointer?) -> ecs_entity_t
 {
-    guard let system_data = flecs_poly_get_(
+    let system_data = flecs_poly_get_(
         UnsafePointer(world), system, EcsSystem)?.bindMemory(
-        to: ecs_system_t.self, capacity: 1) else { return 0 }
+        to: ecs_system_t.self, capacity: 1)
+    if system_data == nil { return 0 }
 
     let stage = flecs_stage_from_world(world)
     flecs_defer_begin(world, stage)
     let result = flecs_run_system(
-        world, stage, system, system_data, stage_index, stage_count,
+        world, stage, system, system_data!, stage_index, stage_count,
         delta_time, param)
     flecs_defer_end(world, stage)
     return result
 }
 
-// MARK: - System Init/Fini
 
 /// Create or update a system.
 public func ecs_system_init(
@@ -179,20 +184,20 @@ public func ecs_system_init(
         entity = ecs_new(world)
     }
 
-    guard let poly = flecs_poly_bind_(world, entity, EcsSystem) else { return 0 }
+    let poly = flecs_poly_bind_(world, entity, EcsSystem); if poly == nil { return 0 }
 
-    if poly.pointee.poly == nil {
+    if poly!.pointee.poly == nil {
         // New system
         guard desc.pointee.callback != nil || desc.pointee.run != nil else { return 0 }
 
-        let system = UnsafeMutablePointer<ecs_system_t>.allocate(capacity: 1)
-        system.initialize(to: ecs_system_t())
-        poly.pointee.poly = UnsafeMutableRawPointer(system)
+        let system = ecs_os_calloc_t(ecs_system_t.self)!
+        system.pointee = ecs_system_t()
+        poly!.pointee.poly = UnsafeMutableRawPointer(system)
 
         // Create query
         var query_desc = desc.pointee.query
         query_desc.entity = entity
-        guard let query = ecs_query_init(world, &query_desc) else {
+        let query = ecs_query_init(world, &query_desc); if query == nil {
             ecs_delete(world, entity)
             return 0
         }
@@ -204,7 +209,7 @@ public func ecs_system_init(
         }
 
         system.pointee.entity = entity
-        system.pointee.query = query
+        system.pointee.query = query!
         system.pointee.run = desc.pointee.run
         system.pointee.action = desc.pointee.callback
         system.pointee.ctx = desc.pointee.ctx
@@ -218,23 +223,23 @@ public func ecs_system_init(
         system.pointee.immediate = desc.pointee.immediate
         system.pointee.name = ecs_get_path(UnsafePointer(world), entity)
         system.pointee.dtor = { ptr in
-            guard let ptr = ptr else { return }
-            let sys = ptr.bindMemory(to: ecs_system_t.self, capacity: 1)
+            if ptr == nil { return }
+            let sys = ptr!.bindMemory(to: ecs_system_t.self, capacity: 1)
             flecs_system_fini(sys)
         }
     } else {
         // Update existing system
-        let system = poly.pointee.poly!.bindMemory(
+        let system = poly!.pointee.poly!.bindMemory(
             to: ecs_system_t.self, capacity: 1)
 
-        if let run = desc.pointee.run { system.pointee.run = run }
-        if let cb = desc.pointee.callback { system.pointee.action = cb }
-        if let ctx = desc.pointee.ctx { system.pointee.ctx = ctx }
-        if let ctx = desc.pointee.callback_ctx { system.pointee.callback_ctx = ctx }
-        if let ctx = desc.pointee.run_ctx { system.pointee.run_ctx = ctx }
-        if let f = desc.pointee.ctx_free { system.pointee.ctx_free = f }
-        if let f = desc.pointee.callback_ctx_free { system.pointee.callback_ctx_free = f }
-        if let f = desc.pointee.run_ctx_free { system.pointee.run_ctx_free = f }
+        if desc.pointee.run != nil { system.pointee.run = desc.pointee.run! }
+        if desc.pointee.callback != nil { system.pointee.action = desc.pointee.callback! }
+        if desc.pointee.ctx != nil { system.pointee.ctx = desc.pointee.ctx! }
+        if desc.pointee.callback_ctx != nil { system.pointee.callback_ctx = desc.pointee.callback_ctx! }
+        if desc.pointee.run_ctx != nil { system.pointee.run_ctx = desc.pointee.run_ctx! }
+        if desc.pointee.ctx_free != nil { system.pointee.ctx_free = desc.pointee.ctx_free! }
+        if desc.pointee.callback_ctx_free != nil { system.pointee.callback_ctx_free = desc.pointee.callback_ctx_free! }
+        if desc.pointee.run_ctx_free != nil { system.pointee.run_ctx_free = desc.pointee.run_ctx_free! }
         if desc.pointee.multi_threaded { system.pointee.multi_threaded = true }
         if desc.pointee.immediate { system.pointee.immediate = true }
     }
@@ -247,19 +252,19 @@ public func ecs_system_init(
 private func flecs_system_fini(
     _ sys: UnsafeMutablePointer<ecs_system_t>)
 {
-    if let ctx_free = sys.pointee.ctx_free, let ctx = sys.pointee.ctx {
-        ctx_free(ctx)
+    if sys.pointee.ctx_free != nil && sys.pointee.ctx != nil {
+        sys.pointee.ctx_free!(sys.pointee.ctx!)
     }
-    if let f = sys.pointee.callback_ctx_free, let ctx = sys.pointee.callback_ctx {
-        f(ctx)
+    if sys.pointee.callback_ctx_free != nil && sys.pointee.callback_ctx != nil {
+        sys.pointee.callback_ctx_free!(sys.pointee.callback_ctx!)
     }
-    if let f = sys.pointee.run_ctx_free, let ctx = sys.pointee.run_ctx {
-        f(ctx)
+    if sys.pointee.run_ctx_free != nil && sys.pointee.run_ctx != nil {
+        sys.pointee.run_ctx_free!(sys.pointee.run_ctx!)
     }
-    if let name = sys.pointee.name {
-        ecs_os_free(UnsafeMutableRawPointer(mutating: name))
+    if sys.pointee.name != nil {
+        ecs_os_free(UnsafeMutableRawPointer(mutating: sys.pointee.name!))
     }
-    sys.deallocate()
+    ecs_os_free(UnsafeMutableRawPointer(sys))
 }
 
 /// Get system data from an entity.
@@ -267,8 +272,8 @@ public func ecs_system_get(
     _ world: UnsafePointer<ecs_world_t>,
     _ entity: ecs_entity_t) -> UnsafePointer<ecs_system_t>?
 {
-    guard let poly = flecs_poly_get_(world, entity, EcsSystem) else { return nil }
-    return poly.bindMemory(to: ecs_system_t.self, capacity: 1)
+    let poly = flecs_poly_get_(world, entity, EcsSystem); if poly == nil { return nil }
+    return poly!.bindMemory(to: ecs_system_t.self, capacity: 1)
 }
 
 /// Set the group id for a system.
@@ -277,14 +282,14 @@ public func ecs_system_set_group(
     _ system: ecs_entity_t,
     _ group_id: UInt64)
 {
-    guard let system_data = flecs_poly_get_(
+    let system_data = flecs_poly_get_(
         UnsafePointer(world), system, EcsSystem)?.bindMemory(
-        to: ecs_system_t.self, capacity: 1) else { return }
-    system_data.pointee.group_id = group_id
-    system_data.pointee.group_id_set = true
+        to: ecs_system_t.self, capacity: 1)
+    if system_data == nil { return }
+    system_data!.pointee.group_id = group_id
+    system_data!.pointee.group_id_set = true
 }
 
-// MARK: - Module Import
 
 /// Import the System module.
 public func FlecsSystemImport(

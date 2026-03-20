@@ -1,9 +1,14 @@
 // OsApi.swift - 1:1 translation of flecs os_api.h
 // Operating system abstraction API for Flecs
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - OS Handle Types
 
 public typealias ecs_os_thread_t = UInt
 public typealias ecs_os_cond_t = UInt
@@ -13,7 +18,6 @@ public typealias ecs_os_sock_t = UInt
 public typealias ecs_os_thread_id_t = UInt64
 public typealias ecs_os_proc_t = @convention(c) () -> Void
 
-// MARK: - Time Type
 
 public struct ecs_time_t {
     public var sec: UInt32 = 0
@@ -25,7 +29,6 @@ public struct ecs_time_t {
     }
 }
 
-// MARK: - OS API Function Types
 
 public typealias ecs_os_api_init_t = @convention(c) () -> Void
 public typealias ecs_os_api_fini_t = @convention(c) () -> Void
@@ -60,7 +63,6 @@ public typealias ecs_os_api_dlproc_t = @convention(c) (ecs_os_dl_t, UnsafePointe
 public typealias ecs_os_api_dlclose_t = @convention(c) (ecs_os_dl_t) -> Void
 public typealias ecs_os_api_module_to_path_t = @convention(c) (UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
 
-// MARK: - OS API Struct
 
 public struct ecs_os_api_t {
     // API init and deinit
@@ -139,18 +141,15 @@ public struct ecs_os_api_t {
     public init() {}
 }
 
-// MARK: - Global OS API
 
 public var ecs_os_api = ecs_os_api_t()
 
-// MARK: - Allocation counters
 
 public var ecs_os_api_malloc_count: Int64 = 0
 public var ecs_os_api_realloc_count: Int64 = 0
 public var ecs_os_api_calloc_count: Int64 = 0
 public var ecs_os_api_free_count: Int64 = 0
 
-// MARK: - OS API convenience functions
 
 public func ecs_os_malloc(_ size: ecs_size_t) -> UnsafeMutableRawPointer? {
     if let fn = ecs_os_api.malloc_ {
@@ -198,7 +197,78 @@ public func ecs_os_memdup(_ src: UnsafeRawPointer?, _ size: ecs_size_t) -> Unsaf
     return dst
 }
 
-// MARK: - OS API initialization
+// Typed allocation macros (mirrors C ecs_os_malloc_t, ecs_os_calloc_t, etc.)
+
+@inline(__always)
+public func ecs_os_malloc_t<T>(_ type: T.Type) -> UnsafeMutablePointer<T>? {
+    return ecs_os_malloc(ecs_size_t(MemoryLayout<T>.stride))?.assumingMemoryBound(to: T.self)
+}
+
+@inline(__always)
+public func ecs_os_malloc_n<T>(_ type: T.Type, _ count: Int32) -> UnsafeMutablePointer<T>? {
+    return ecs_os_malloc(ecs_size_t(MemoryLayout<T>.stride) * count)?.assumingMemoryBound(to: T.self)
+}
+
+@inline(__always)
+public func ecs_os_calloc_t<T>(_ type: T.Type) -> UnsafeMutablePointer<T>? {
+    return ecs_os_calloc(ecs_size_t(MemoryLayout<T>.stride))?.assumingMemoryBound(to: T.self)
+}
+
+@inline(__always)
+public func ecs_os_calloc_n<T>(_ type: T.Type, _ count: Int32) -> UnsafeMutablePointer<T>? {
+    return ecs_os_calloc(ecs_size_t(MemoryLayout<T>.stride) * count)?.assumingMemoryBound(to: T.self)
+}
+
+@inline(__always)
+public func ecs_os_realloc_n<T>(_ ptr: UnsafeMutableRawPointer?, _ type: T.Type, _ count: Int32) -> UnsafeMutablePointer<T>? {
+    return ecs_os_realloc(ptr, ecs_size_t(MemoryLayout<T>.stride) * count)?.assumingMemoryBound(to: T.self)
+}
+
+@inline(__always)
+public func ecs_os_free_t<T>(_ ptr: UnsafeMutablePointer<T>?) {
+    ecs_os_free(UnsafeMutableRawPointer(ptr))
+}
+
+// Memory operation macros (mirrors C ecs_os_memcpy, ecs_os_memset, etc.)
+
+@inline(__always)
+public func ecs_os_memcpy(_ dst: UnsafeMutableRawPointer?, _ src: UnsafeRawPointer?, _ num: Int) {
+    memcpy(dst, src, num)
+}
+
+@inline(__always)
+public func ecs_os_memset(_ ptr: UnsafeMutableRawPointer?, _ value: Int32, _ num: Int) {
+    memset(ptr, value, num)
+}
+
+@inline(__always)
+public func ecs_os_memcpy_t<T>(_ dst: UnsafeMutableRawPointer?, _ src: UnsafeRawPointer?, _ type: T.Type) {
+    memcpy(dst, src, MemoryLayout<T>.stride)
+}
+
+@inline(__always)
+public func ecs_os_memcpy_n<T>(_ dst: UnsafeMutableRawPointer?, _ src: UnsafeRawPointer?, _ type: T.Type, _ count: Int) {
+    memcpy(dst, src, MemoryLayout<T>.stride * count)
+}
+
+@inline(__always)
+public func ecs_os_memset_t<T>(_ ptr: UnsafeMutableRawPointer?, _ value: Int32, _ type: T.Type) {
+    memset(ptr, value, MemoryLayout<T>.stride)
+}
+
+@inline(__always)
+public func ecs_os_memset_n<T>(_ ptr: UnsafeMutableRawPointer?, _ value: Int32, _ type: T.Type, _ count: Int) {
+    memset(ptr, value, MemoryLayout<T>.stride * count)
+}
+
+@inline(__always)
+public func ecs_os_zeromem<T>(_ ptr: UnsafeMutablePointer<T>?) {
+    if ptr != nil {
+        memset(UnsafeMutableRawPointer(ptr), 0, MemoryLayout<T>.stride)
+    }
+}
+
+// OS API initialization
 
 public func ecs_os_set_api_defaults() {
     // Set default implementations using C standard library
@@ -278,7 +348,6 @@ public func ecs_os_get_api() -> ecs_os_api_t {
     return ecs_os_api
 }
 
-// MARK: - Time utilities
 
 public func ecs_time_measure(_ start: UnsafeMutablePointer<ecs_time_t>) -> Double {
     var stop = ecs_time_t()
@@ -295,7 +364,6 @@ public func ecs_time_to_double(_ t: ecs_time_t) -> Double {
     return Double(t.sec) + Double(t.nanosec) / 1_000_000_000.0
 }
 
-// MARK: - Logging helpers
 
 public func ecs_os_dbg(_ file: UnsafePointer<CChar>?, _ line: Int32, _ msg: UnsafePointer<CChar>?) {
     ecs_os_api.log_?(1, file, line, msg)
@@ -317,7 +385,6 @@ public func ecs_os_fatal(_ file: UnsafePointer<CChar>?, _ line: Int32, _ msg: Un
     ecs_os_api.log_?(-4, file, line, msg)
 }
 
-// MARK: - Abort
 
 public func ecs_os_abort() {
     if let fn = ecs_os_api.abort_ {
@@ -326,7 +393,6 @@ public func ecs_os_abort() {
     abort()
 }
 
-// MARK: - Thread operations
 
 public func ecs_os_thread_new(_ callback: ecs_os_thread_callback_t?, _ param: UnsafeMutableRawPointer?) -> ecs_os_thread_t {
     return ecs_os_api.thread_new_?(callback, param) ?? 0
@@ -340,7 +406,6 @@ public func ecs_os_thread_self() -> ecs_os_thread_id_t {
     return ecs_os_api.thread_self_?() ?? 0
 }
 
-// MARK: - Mutex operations
 
 public func ecs_os_mutex_new() -> ecs_os_mutex_t {
     return ecs_os_api.mutex_new_?() ?? 0
@@ -358,7 +423,6 @@ public func ecs_os_mutex_unlock(_ mutex: ecs_os_mutex_t) {
     ecs_os_api.mutex_unlock_?(mutex)
 }
 
-// MARK: - Condition variable operations
 
 public func ecs_os_cond_new() -> ecs_os_cond_t {
     return ecs_os_api.cond_new_?() ?? 0
@@ -380,7 +444,6 @@ public func ecs_os_cond_wait(_ cond: ecs_os_cond_t, _ mutex: ecs_os_mutex_t) {
     ecs_os_api.cond_wait_?(cond, mutex)
 }
 
-// MARK: - Atomic operations
 
 public func ecs_os_ainc(_ value: UnsafeMutablePointer<Int32>) -> Int32 {
     if let fn = ecs_os_api.ainc_ {
@@ -414,7 +477,6 @@ public func ecs_os_ladec(_ value: UnsafeMutablePointer<Int64>) -> Int64 {
     return value.pointee
 }
 
-// MARK: - Counter helpers (non-accurate mode)
 
 public func ecs_os_inc(_ v: UnsafeMutablePointer<Int32>) {
     v.pointee += 1
@@ -432,13 +494,11 @@ public func ecs_os_ldec(_ v: UnsafeMutablePointer<Int64>) {
     v.pointee -= 1
 }
 
-// MARK: - Sleep
 
 public func ecs_os_sleep(_ sec: Int32, _ nanosec: Int32) {
     ecs_os_api.sleep_?(sec, nanosec)
 }
 
-// MARK: - OS API flags
 
 public let EcsOsApiHighResolutionTimer: ecs_flags32_t = (1 << 0)
 public let EcsOsApiLogWithColors: ecs_flags32_t = (1 << 1)

@@ -1,9 +1,14 @@
 // Hash.swift - 1:1 translation of flecs hash.c (wyhash)
 // High-quality hash function used throughout flecs
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Internal wyhash implementation
 
 // Default secret parameters
 private let wyp_: (UInt64, UInt64, UInt64, UInt64) = (
@@ -84,7 +89,6 @@ private func wyhash(_ key: UnsafeRawPointer, _ len: Int, _ seed_in: UInt64) -> U
     return wymix_(a ^ wyp_.0 ^ UInt64(len), b ^ wyp_.1)
 }
 
-// MARK: - Public API
 
 /// Hash arbitrary data using wyhash. This replaces the FNV-1a implementation
 /// in Misc.swift with the production wyhash used by the C codebase.
@@ -92,6 +96,6 @@ public func flecs_wyhash(
     _ data: UnsafeRawPointer?,
     _ length: ecs_size_t) -> UInt64
 {
-    guard let data = data, length > 0 else { return 0 }
-    return wyhash(data, Int(length), 0)
+    if data == nil || length <= 0 { return 0 }
+    return wyhash(data!, Int(length), 0)
 }

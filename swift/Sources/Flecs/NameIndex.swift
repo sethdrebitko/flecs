@@ -1,9 +1,14 @@
 // NameIndex.swift - 1:1 translation of flecs name_index.c
 // Data structure for resolving 64-bit keys by string name
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Types
 
 public struct ecs_hashed_string_t {
     public var value: UnsafeMutablePointer<CChar>?
@@ -17,13 +22,12 @@ public struct ecs_hashed_string_t {
     }
 }
 
-// MARK: - Internal helpers
 
 private func flecs_name_index_hash(
     _ ptr: UnsafeRawPointer?) -> UInt64
 {
-    guard let ptr = ptr else { return 0 }
-    let str = ptr.assumingMemoryBound(to: ecs_hashed_string_t.self)
+    if ptr == nil { return 0 }
+    let str = ptr!.assumingMemoryBound(to: ecs_hashed_string_t.self)
     return str.pointee.hash
 }
 
@@ -31,9 +35,9 @@ private func flecs_name_index_compare(
     _ ptr1: UnsafeRawPointer?,
     _ ptr2: UnsafeRawPointer?) -> Int32
 {
-    guard let ptr1 = ptr1, let ptr2 = ptr2 else { return 0 }
-    let str1 = ptr1.assumingMemoryBound(to: ecs_hashed_string_t.self)
-    let str2 = ptr2.assumingMemoryBound(to: ecs_hashed_string_t.self)
+    if ptr1 == nil || ptr2 == nil { return 0 }
+    let str1 = ptr1!.assumingMemoryBound(to: ecs_hashed_string_t.self)
+    let str2 = ptr2!.assumingMemoryBound(to: ecs_hashed_string_t.self)
     let len1 = str1.pointee.length
     let len2 = str2.pointee.length
     if len1 != len2 {
@@ -65,7 +69,6 @@ private func flecs_get_hashed_string(
     return result
 }
 
-// MARK: - Public API
 
 public func flecs_name_index_init(
     _ hm: UnsafeMutablePointer<ecs_hashmap_t>,
@@ -97,8 +100,8 @@ public func flecs_name_index_is_init(
 public func flecs_name_index_new(
     _ allocator: UnsafeMutablePointer<ecs_allocator_t>?) -> UnsafeMutablePointer<ecs_hashmap_t>
 {
-    let result = UnsafeMutablePointer<ecs_hashmap_t>.allocate(capacity: 1)
-    result.initialize(to: ecs_hashmap_t())
+    let result = ecs_os_calloc_t(ecs_hashmap_t.self)!
+    result.pointee = ecs_hashmap_t()
     flecs_name_index_init(result, allocator)
     return result
 }
@@ -112,17 +115,17 @@ public func flecs_name_index_fini(
 public func flecs_name_index_free(
     _ map: UnsafeMutablePointer<ecs_hashmap_t>?)
 {
-    guard let map = map else { return }
-    flecs_name_index_fini(map)
-    map.deinitialize(count: 1)
-    map.deallocate()
+    if map == nil { return }
+    flecs_name_index_fini(map!)
+    map!.deinitialize(count: 1)
+    ecs_os_free(UnsafeMutableRawPointer(map!))
 }
 
 public func flecs_name_index_copy(
     _ map: UnsafeMutablePointer<ecs_hashmap_t>) -> UnsafeMutablePointer<ecs_hashmap_t>
 {
-    let result = UnsafeMutablePointer<ecs_hashmap_t>.allocate(capacity: 1)
-    result.initialize(to: ecs_hashmap_t())
+    let result = ecs_os_calloc_t(ecs_hashmap_t.self)!
+    result.pointee = ecs_hashmap_t()
     flecs_hashmap_copy(result, UnsafePointer(map))
     return result
 }
@@ -134,27 +137,29 @@ public func flecs_name_index_find_ptr(
     _ hash: UInt64) -> UnsafePointer<UInt64>?
 {
     let hs = flecs_get_hashed_string(name, length, hash)
-    guard let b = flecs_hashmap_get_bucket(map, hs.hash) else {
+    let b = flecs_hashmap_get_bucket(map, hs.hash)
+    if b == nil {
         return nil
     }
 
-    let count = ecs_vec_count(&b.pointee.keys)
-    guard let keys = ecs_vec_first(&b.pointee.keys)?
-        .bindMemory(to: ecs_hashed_string_t.self, capacity: Int(count)) else {
+    let count = ecs_vec_count(&b!.pointee.keys)
+    let keys = ecs_vec_first(&b!.pointee.keys)?
+        .bindMemory(to: ecs_hashed_string_t.self, capacity: Int(count))
+    if keys == nil {
         return nil
     }
 
     for i in 0..<Int(count) {
-        let key = keys.advanced(by: i)
+        let key = keys!.advanced(by: i)
         if hs.length != key.pointee.length {
             continue
         }
         if strcmp(name, key.pointee.value) == 0 {
-            let e = ecs_vec_get(&b.pointee.values,
+            let e = ecs_vec_get(&b!.pointee.values,
                 Int32(MemoryLayout<UInt64>.stride), Int32(i))
-            guard let e = e else { return nil }
+            if e == nil { return nil }
             return UnsafePointer<UInt64>(
-                e.bindMemory(to: UInt64.self, capacity: 1))
+                e!.bindMemory(to: UInt64.self, capacity: 1))
         }
     }
 
@@ -167,10 +172,11 @@ public func flecs_name_index_find(
     _ length: ecs_size_t,
     _ hash: UInt64) -> UInt64
 {
-    guard let id = flecs_name_index_find_ptr(map, name, length, hash) else {
+    let id = flecs_name_index_find_ptr(map, name, length, hash)
+    if id == nil {
         return 0
     }
-    return id.pointee
+    return id!.pointee
 }
 
 public func flecs_name_index_remove(
@@ -178,19 +184,21 @@ public func flecs_name_index_remove(
     _ e: UInt64,
     _ hash: UInt64)
 {
-    guard let b = flecs_hashmap_get_bucket(UnsafePointer(map), hash) else {
+    let b = flecs_hashmap_get_bucket(UnsafePointer(map), hash)
+    if b == nil {
         return
     }
 
-    let count = ecs_vec_count(&b.pointee.values)
-    guard let ids = ecs_vec_first(&b.pointee.values)?
-        .bindMemory(to: UInt64.self, capacity: Int(count)) else {
+    let count = ecs_vec_count(&b!.pointee.values)
+    let ids = ecs_vec_first(&b!.pointee.values)?
+        .bindMemory(to: UInt64.self, capacity: Int(count))
+    if ids == nil {
         return
     }
 
     for i in 0..<Int(count) {
-        if ids[i] == e {
-            flecs_hm_bucket_remove(map, b, hash, Int32(i))
+        if ids![i] == e {
+            flecs_hm_bucket_remove(map, b!, hash, Int32(i))
             break
         }
     }
@@ -202,23 +210,26 @@ public func flecs_name_index_update_name(
     _ hash: UInt64,
     _ name: UnsafePointer<CChar>)
 {
-    guard let b = flecs_hashmap_get_bucket(UnsafePointer(map), hash) else {
+    let b = flecs_hashmap_get_bucket(UnsafePointer(map), hash)
+    if b == nil {
         return
     }
 
-    let count = ecs_vec_count(&b.pointee.values)
-    guard let ids = ecs_vec_first(&b.pointee.values)?
-        .bindMemory(to: UInt64.self, capacity: Int(count)) else {
+    let count = ecs_vec_count(&b!.pointee.values)
+    let ids = ecs_vec_first(&b!.pointee.values)?
+        .bindMemory(to: UInt64.self, capacity: Int(count))
+    if ids == nil {
         return
     }
 
     for i in 0..<Int(count) {
-        if ids[i] == e {
-            guard let key_ptr = ecs_vec_get(&b.pointee.keys,
-                Int32(MemoryLayout<ecs_hashed_string_t>.stride), Int32(i)) else {
+        if ids![i] == e {
+            let key_ptr = ecs_vec_get(&b!.pointee.keys,
+                Int32(MemoryLayout<ecs_hashed_string_t>.stride), Int32(i))
+            if key_ptr == nil {
                 return
             }
-            let key = key_ptr.bindMemory(
+            let key = key_ptr!.bindMemory(
                 to: ecs_hashed_string_t.self, capacity: 1)
             key.pointee.value = UnsafeMutablePointer(mutating: name)
             return
@@ -248,7 +259,7 @@ public func flecs_name_index_ensure(
         Int32(MemoryLayout<ecs_hashed_string_t>.stride),
         &key,
         Int32(MemoryLayout<UInt64>.stride))
-    if let value = hmr.value {
-        value.bindMemory(to: UInt64.self, capacity: 1).pointee = id
+    if hmr.value != nil {
+        hmr.value!.bindMemory(to: UInt64.self, capacity: 1).pointee = id
     }
 }

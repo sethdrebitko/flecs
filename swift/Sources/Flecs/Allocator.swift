@@ -2,9 +2,14 @@
 /// Translation of ecs_allocator_t and its operations from flecs.
 /// General purpose allocator that manages block allocators for different sizes.
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Types
 
 /// Type alias for ecs_size_t used throughout. Defined here but will be in Types.swift.
 public typealias ecs_size_t = Int32
@@ -21,7 +26,6 @@ public struct ecs_allocator_t {
     }
 }
 
-// MARK: - Internal helpers
 
 @inline(__always)
 internal func flecs_allocator_size(_ size: ecs_size_t) -> ecs_size_t {
@@ -33,7 +37,6 @@ internal func flecs_allocator_size_hash(_ size: ecs_size_t) -> ecs_size_t {
     return size >> 4
 }
 
-// MARK: - Public API
 
 /// Initialize an allocator.
 public func flecs_allocator_init(
@@ -50,12 +53,12 @@ public func flecs_allocator_fini(
 {
     let count = flecs_sparse_count(withUnsafePointer(to: &a.pointee.sizes) { $0 })
     for i in 0..<count {
-        if let ba_ptr = flecs_sparse_get_dense(
+        let ba_ptr = flecs_sparse_get_dense(
             withUnsafePointer(to: &a.pointee.sizes) { $0 },
             Int32(MemoryLayout<ecs_block_allocator_t>.stride),
             i)
-        {
-            let ba = ba_ptr.bindMemory(to: ecs_block_allocator_t.self, capacity: 1)
+        if ba_ptr != nil {
+            let ba = ba_ptr!.bindMemory(to: ecs_block_allocator_t.self, capacity: 1)
             flecs_ballocator_fini(ba)
         }
     }
@@ -76,23 +79,23 @@ public func flecs_allocator_get(
     let hash = flecs_allocator_size_hash(aligned_size)
     let ba_size = Int32(MemoryLayout<ecs_block_allocator_t>.stride)
 
-    if let result = flecs_sparse_get(
+    let existing = flecs_sparse_get(
         withUnsafePointer(to: &a.pointee.sizes) { $0 },
         ba_size,
         UInt64(UInt32(bitPattern: hash)))
-    {
-        return result.bindMemory(to: ecs_block_allocator_t.self, capacity: 1)
+    if existing != nil {
+        return existing!.bindMemory(to: ecs_block_allocator_t.self, capacity: 1)
     }
 
-    guard let result = flecs_sparse_ensure_fast(
+    let result = flecs_sparse_ensure_fast(
         &a.pointee.sizes,
         ba_size,
         UInt64(UInt32(bitPattern: hash)))
-    else {
+    if result == nil {
         return nil
     }
 
-    let ba = result.bindMemory(to: ecs_block_allocator_t.self, capacity: 1)
+    let ba = result!.bindMemory(to: ecs_block_allocator_t.self, capacity: 1)
     flecs_ballocator_init(ba, aligned_size)
     return ba
 }
@@ -102,9 +105,10 @@ public func flecs_alloc(
     _ a: UnsafeMutablePointer<ecs_allocator_t>?,
     _ size: ecs_size_t) -> UnsafeMutableRawPointer?
 {
-    guard let a = a else { return malloc(Int(size)) }
-    guard let ba = flecs_allocator_get(a, size) else { return nil }
-    return flecs_balloc(ba)
+    if a == nil { return malloc(Int(size)) }
+    let ba = flecs_allocator_get(a!, size)
+    if ba == nil { return nil }
+    return flecs_balloc(ba!)
 }
 
 /// Allocate zeroed memory of a given size.
@@ -112,9 +116,10 @@ public func flecs_calloc(
     _ a: UnsafeMutablePointer<ecs_allocator_t>?,
     _ size: ecs_size_t) -> UnsafeMutableRawPointer?
 {
-    guard let a = a else { return calloc(1, Int(size)) }
-    guard let ba = flecs_allocator_get(a, size) else { return nil }
-    return flecs_bcalloc(ba)
+    if a == nil { return calloc(1, Int(size)) }
+    let ba = flecs_allocator_get(a!, size)
+    if ba == nil { return nil }
+    return flecs_bcalloc(ba!)
 }
 
 /// Free memory of a given size.
@@ -123,10 +128,11 @@ public func flecs_free(
     _ size: ecs_size_t,
     _ ptr: UnsafeMutableRawPointer?)
 {
-    guard let ptr = ptr else { return }
-    guard let a = a else { free(ptr); return }
-    guard let ba = flecs_allocator_get(a, size) else { free(ptr); return }
-    flecs_bfree(ba, ptr)
+    if ptr == nil { return }
+    if a == nil { free(ptr!); return }
+    let ba = flecs_allocator_get(a!, size)
+    if ba == nil { free(ptr!); return }
+    flecs_bfree(ba!, ptr!)
 }
 
 /// Reallocate memory from one size to another.
@@ -136,9 +142,9 @@ public func flecs_realloc(
     _ src_size: ecs_size_t,
     _ ptr: UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer?
 {
-    guard let a = a else { return realloc(ptr, Int(dst_size)) }
-    let dst_ba = flecs_allocator_get(a, dst_size)
-    let src_ba = (src_size > 0) ? flecs_allocator_get(a, src_size) : nil
+    if a == nil { return realloc(ptr, Int(dst_size)) }
+    let dst_ba = flecs_allocator_get(a!, dst_size)
+    let src_ba = (src_size > 0) ? flecs_allocator_get(a!, src_size) : nil
     return flecs_brealloc(dst_ba, src_ba, ptr)
 }
 
@@ -148,9 +154,10 @@ public func flecs_strdup(
     _ str: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
 {
     let len = strlen(str)
-    guard let result = flecs_alloc(a, Int32(len + 1)) else { return nil }
-    memcpy(result, str, len + 1)
-    return result.bindMemory(to: CChar.self, capacity: len + 1)
+    let result = flecs_alloc(a, Int32(len + 1))
+    if result == nil { return nil }
+    memcpy(result!, str, len + 1)
+    return result!.bindMemory(to: CChar.self, capacity: len + 1)
 }
 
 /// Free a string previously allocated with flecs_strdup.
@@ -158,9 +165,9 @@ public func flecs_strfree(
     _ a: UnsafeMutablePointer<ecs_allocator_t>?,
     _ str: UnsafeMutablePointer<CChar>?)
 {
-    guard let str = str else { return }
-    let len = strlen(str)
-    flecs_free(a, Int32(len + 1), UnsafeMutableRawPointer(str))
+    if str == nil { return }
+    let len = strlen(str!)
+    flecs_free(a, Int32(len + 1), UnsafeMutableRawPointer(str!))
 }
 
 /// Duplicate a memory block using the allocator.
@@ -170,8 +177,9 @@ public func flecs_dup(
     _ src: UnsafeRawPointer?) -> UnsafeMutableRawPointer?
 {
     if size == 0 { return nil }
-    guard let src = src else { return nil }
-    guard let dst = flecs_alloc(a, size) else { return nil }
-    memcpy(dst, src, Int(size))
-    return dst
+    if src == nil { return nil }
+    let dst = flecs_alloc(a, size)
+    if dst == nil { return nil }
+    memcpy(dst!, src!, Int(size))
+    return dst!
 }

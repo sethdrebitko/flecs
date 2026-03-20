@@ -1,9 +1,14 @@
 // Structs.swift - 1:1 translation of flecs core structs
 // All public API struct types and function pointer typealiases
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Function Pointer Types
 
 public typealias ecs_run_action_t = @convention(c) (UnsafeMutablePointer<ecs_iter_t>?) -> Void
 public typealias ecs_iter_action_t = @convention(c) (UnsafeMutablePointer<ecs_iter_t>?) -> Void
@@ -26,7 +31,6 @@ public typealias ecs_cmp_t = @convention(c) (UnsafeRawPointer?, UnsafeRawPointer
 public typealias ecs_equals_t = @convention(c) (UnsafeRawPointer?, UnsafeRawPointer?, UnsafePointer<ecs_type_info_t>?) -> Bool
 public typealias flecs_poly_dtor_t = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
-// MARK: - Core Structs
 
 public struct ecs_type_t {
     public var array: UnsafeMutablePointer<ecs_id_t>? = nil
@@ -90,7 +94,6 @@ public struct ecs_ref_t {
     public init() {}
 }
 
-// MARK: - Type Hooks
 
 public struct ecs_type_hooks_t {
     public var ctor: ecs_xtor_t? = nil
@@ -126,7 +129,6 @@ public struct ecs_type_info_t {
     public init() {}
 }
 
-// MARK: - Record & Table Record
 
 public struct ecs_record_t {
     public var table: UnsafeMutableRawPointer? = nil
@@ -159,7 +161,6 @@ public struct ecs_table_diff_t {
     public init() {}
 }
 
-// MARK: - Query
 
 public struct ecs_query_t {
     public var hdr: ecs_header_t = ecs_header_t()
@@ -180,7 +181,7 @@ public struct ecs_query_t {
     public var row_fields: ecs_termset_t = 0
     public var shared_readonly_fields: ecs_termset_t = 0
     public var set_fields: ecs_termset_t = 0
-    public var cache_kind: EcsQueryCacheKind = .default
+    public var cache_kind: ecs_query_cache_kind_t = EcsQueryCacheDefault
     public var vars: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>? = nil
     public var ctx: UnsafeMutableRawPointer? = nil
     public var binding_ctx: UnsafeMutableRawPointer? = nil
@@ -191,7 +192,6 @@ public struct ecs_query_t {
     public init() {}
 }
 
-// MARK: - Observer
 
 public struct ecs_observer_t {
     public var hdr: ecs_header_t = ecs_header_t()
@@ -212,7 +212,6 @@ public struct ecs_observer_t {
     public init() {}
 }
 
-// MARK: - Descriptor Structs
 
 public struct ecs_entity_desc_t {
     public var _canary: Int32 = 0
@@ -258,7 +257,7 @@ public struct ecs_query_desc_t {
                        ecs_term_t, ecs_term_t, ecs_term_t, ecs_term_t, ecs_term_t, ecs_term_t, ecs_term_t, ecs_term_t,
                        ecs_term_t, ecs_term_t, ecs_term_t, ecs_term_t, ecs_term_t, ecs_term_t, ecs_term_t, ecs_term_t)
     public var expr: UnsafePointer<CChar>? = nil
-    public var cache_kind: EcsQueryCacheKind = .default
+    public var cache_kind: ecs_query_cache_kind_t = EcsQueryCacheDefault
     public var flags: ecs_flags32_t = 0
     public var order_by_callback: ecs_order_by_action_t? = nil
     public var order_by_table_callback: ecs_sort_table_action_t? = nil
@@ -317,7 +316,6 @@ public struct ecs_event_desc_t {
     public init() {}
 }
 
-// MARK: - Iterator Private Types
 
 public struct ecs_page_iter_t {
     public var offset: Int32 = 0
@@ -389,7 +387,6 @@ public struct ecs_iter_private_t {
     public init() {}
 }
 
-// MARK: - The Main Iterator
 
 public struct ecs_iter_t {
     // World
@@ -452,7 +449,6 @@ public struct ecs_iter_t {
     public init() {}
 }
 
-// MARK: - Built-in Component Types
 
 public struct EcsIdentifier {
     public var value: UnsafeMutablePointer<CChar>? = nil
@@ -484,7 +480,6 @@ public struct EcsParent {
     public init() {}
 }
 
-// MARK: - World Info
 
 public struct ecs_build_info_t {
     public var compiler: UnsafePointer<CChar>? = nil
@@ -568,7 +563,6 @@ public struct ecs_query_group_info_t {
     public init() {}
 }
 
-// MARK: - Observable
 
 public struct ecs_event_record_t {
     public var any: UnsafeMutableRawPointer? = nil
@@ -590,7 +584,6 @@ public struct ecs_observable_t {
     public init() {}
 }
 
-// MARK: - Suspend/Resume Readonly
 
 public struct ecs_suspend_readonly_state_t {
     public var is_readonly: Bool = false
@@ -605,7 +598,6 @@ public struct ecs_suspend_readonly_state_t {
     public init() {}
 }
 
-// MARK: - Parent Record
 
 public struct ecs_parent_record_t {
     public var entity: UInt32 = 0
@@ -613,7 +605,6 @@ public struct ecs_parent_record_t {
     public init() {}
 }
 
-// MARK: - Table Records Result
 
 public struct ecs_table_records_t {
     public var array: UnsafePointer<ecs_table_record_t>? = nil

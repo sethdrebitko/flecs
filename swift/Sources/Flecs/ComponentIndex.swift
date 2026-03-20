@@ -1,9 +1,14 @@
 // ComponentIndex.swift - 1:1 translation of flecs component_index.c
 // Index for looking up tables by component id (component records)
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Helpers
 
 /// Strip generation from entity id for hashing.
 @inline(__always)
@@ -57,7 +62,6 @@ public func ecs_pair_second(
     return ecs_get_alive(world, ECS_PAIR_SECOND(pair))
 }
 
-// MARK: - Entity Index Bridge Functions (macros in C)
 
 /// flecs_entities_get(world, entity) - get record for alive entity
 @inline(__always)
@@ -117,7 +121,6 @@ public func flecs_add_flag(
     r.pointee.row |= flag
 }
 
-// MARK: - Component Record Lookup
 
 /// Look up a component record by id. Returns nil if not found.
 public func flecs_components_get(
@@ -136,14 +139,16 @@ public func flecs_components_get(
     if hash >= UInt64(FLECS_HI_ID_RECORD_ID) {
         // Look up in hi map
         var hi_map = UnsafeMutablePointer(mutating: world).pointee.id_index_hi
-        guard let val = ecs_map_get(&hi_map, hash) else { return nil }
-        let ptr_val = val.pointee
+        let val = ecs_map_get(&hi_map, hash)
+        if val == nil { return nil }
+        let ptr_val = val!.pointee
         if ptr_val == 0 { return nil }
         return UnsafeMutableRawPointer(bitPattern: UInt(ptr_val))?
             .bindMemory(to: ecs_component_record_t.self, capacity: 1)
     } else {
         // Look up in lo array
-        guard let lo = world.pointee.id_index_lo else { return nil }
+        if world.pointee.id_index_lo == nil { return nil }
+        let lo = world.pointee.id_index_lo!
         return lo[Int(hash)]
     }
 }
@@ -154,13 +159,13 @@ public func flecs_components_ensure(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ id: ecs_id_t) -> UnsafeMutablePointer<ecs_component_record_t>
 {
-    if let existing = flecs_components_get(UnsafePointer(world), id) {
-        return existing
+    let existing = flecs_components_get(UnsafePointer(world), id)
+    if existing != nil {
+        return existing!
     }
     return flecs_component_new(world, id)
 }
 
-// MARK: - Component Record Creation
 
 /// Create a new component record for the given id.
 private func flecs_component_new(
@@ -170,16 +175,16 @@ private func flecs_component_new(
     let hash = flecs_component_hash(id)
 
     // Allocate
-    let cr = UnsafeMutablePointer<ecs_component_record_t>.allocate(capacity: 1)
-    cr.initialize(to: ecs_component_record_t())
+    let cr = ecs_os_calloc_t(ecs_component_record_t.self)!
+    cr.pointee = ecs_component_record_t()
 
     // Insert into index
     if hash >= UInt64(FLECS_HI_ID_RECORD_ID) {
         let val = ecs_map_ensure(&world.pointee.id_index_hi, hash)
         val.pointee = ecs_map_val_t(UInt(bitPattern: UnsafeMutableRawPointer(cr)))
     } else {
-        if let lo = world.pointee.id_index_lo {
-            lo[Int(hash)] = cr
+        if world.pointee.id_index_lo != nil {
+            world.pointee.id_index_lo![Int(hash)] = cr
         }
     }
 
@@ -192,8 +197,8 @@ private func flecs_component_new(
     let is_pair = ECS_IS_PAIR(id)
 
     if is_pair {
-        let pair_ptr = UnsafeMutablePointer<ecs_pair_record_t>.allocate(capacity: 1)
-        pair_ptr.initialize(to: ecs_pair_record_t())
+        let pair_ptr = ecs_os_calloc_t(ecs_pair_record_t.self)!
+        pair_ptr.pointee = ecs_pair_record_t()
         pair_ptr.pointee.reachable.current = -1
         cr.pointee.pair = pair_ptr
 
@@ -234,7 +239,6 @@ private func flecs_component_new(
     return cr
 }
 
-// MARK: - Component Record Lifecycle
 
 /// Increment refcount on a component record.
 public func flecs_component_claim(
@@ -280,12 +284,12 @@ private func flecs_component_free(
     ecs_map_fini(&cr.pointee.cache.index)
 
     // Clean up pair record
-    if let pair = cr.pointee.pair {
-        if let name_index = pair.pointee.name_index {
-            flecs_name_index_free(name_index)
+    if cr.pointee.pair != nil {
+        if cr.pointee.pair!.pointee.name_index != nil {
+            flecs_name_index_free(cr.pointee.pair!.pointee.name_index!)
         }
-        pair.deinitialize(count: 1)
-        pair.deallocate()
+        cr.pointee.pair!.deinitialize(count: 1)
+        ecs_os_free(UnsafeMutableRawPointer(cr.pointee.pair!))
     }
 
     // Remove from index
@@ -293,16 +297,15 @@ private func flecs_component_free(
     if hash >= UInt64(FLECS_HI_ID_RECORD_ID) {
         ecs_map_remove(&world.pointee.id_index_hi, hash)
     } else {
-        if let lo = world.pointee.id_index_lo {
-            lo[Int(hash)] = nil
+        if world.pointee.id_index_lo != nil {
+            world.pointee.id_index_lo![Int(hash)] = nil
         }
     }
 
     cr.deinitialize(count: 1)
-    cr.deallocate()
+    ecs_os_free(UnsafeMutableRawPointer(cr))
 }
 
-// MARK: - Type Info on Component Records
 
 /// Set the type info for a component record. Returns true if changed.
 @discardableResult
@@ -338,16 +341,16 @@ public func flecs_component_get_type_info(
     return cr.pointee.type_info
 }
 
-// MARK: - Name Index on Component Records
 
 /// Ensure a name index exists for a component record's pair.
 public func flecs_component_name_index_ensure(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ cr: UnsafeMutablePointer<ecs_component_record_t>) -> UnsafeMutablePointer<ecs_hashmap_t>?
 {
-    guard let pair = cr.pointee.pair else { return nil }
-    if let map = pair.pointee.name_index {
-        return map
+    if cr.pointee.pair == nil { return nil }
+    let pair = cr.pointee.pair!
+    if pair.pointee.name_index != nil {
+        return pair.pointee.name_index
     }
     let map = flecs_name_index_new(&world.pointee.allocator)
     pair.pointee.name_index = map
@@ -362,7 +365,6 @@ public func flecs_component_name_index_get(
     return cr.pointee.pair?.pointee.name_index
 }
 
-// MARK: - Table Record Lookup
 
 /// Get the table record for a component in a given table.
 public func flecs_component_get_table(
@@ -373,7 +375,6 @@ public func flecs_component_get_table(
     return nil
 }
 
-// MARK: - Linked List Traversal
 
 /// Get next component record in the (Relationship, *) linked list.
 public func flecs_component_first_next(
@@ -410,7 +411,6 @@ public func flecs_component_get_childof_depth(
     return cr.pointee.pair?.pointee.depth ?? 0
 }
 
-// MARK: - Init/Fini
 
 /// Initialize the world's component index.
 public func flecs_components_init(
@@ -432,18 +432,20 @@ public func flecs_components_fini(
     while ecs_map_count(&world.pointee.id_index_hi) > 0 {
         var it = ecs_map_iter(&world.pointee.id_index_hi)
         if ecs_map_next(&it) {
-            if let ptr = ecs_map_ptr(&it) {
-                let cr = ptr.bindMemory(to: ecs_component_record_t.self, capacity: 1)
+            let ptr: UnsafeMutableRawPointer? = ecs_map_ptr(&it)
+            if ptr != nil {
+                let cr = ptr!.bindMemory(to: ecs_component_record_t.self, capacity: 1)
                 flecs_component_release(world, cr)
             }
         }
     }
 
     // Clean up lo array
-    if let lo = world.pointee.id_index_lo {
+    if world.pointee.id_index_lo != nil {
+        let lo = world.pointee.id_index_lo!
         for i in 0..<Int(FLECS_HI_ID_RECORD_ID) {
-            if let cr = lo[i] {
-                flecs_component_release(world, cr)
+            if lo[i] != nil {
+                flecs_component_release(world, lo[i]!)
             }
         }
     }
@@ -452,14 +454,13 @@ public func flecs_components_fini(
     free(world.pointee.id_index_lo)
 }
 
-// MARK: - Component shrink
 
 /// Shrink component record memory.
 public func flecs_component_shrink(
     _ cr: UnsafeMutablePointer<ecs_component_record_t>)
 {
     ecs_map_reclaim(&cr.pointee.cache.index)
-    if let pr = cr.pointee.pair, let ni = pr.pointee.name_index {
-        ecs_map_reclaim(&ni.pointee.impl)
+    if cr.pointee.pair != nil && cr.pointee.pair!.pointee.name_index != nil {
+        ecs_map_reclaim(&cr.pointee.pair!.pointee.name_index!.pointee.impl)
     }
 }

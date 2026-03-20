@@ -1,9 +1,14 @@
 // Stage.swift - 1:1 translation of flecs stage.c
 // Staging implementation for deferred operations and multithreading
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Stage Helpers
 
 /// Get stage from a world pointer (resolves world-or-stage to stage).
 public func flecs_stage_from_world(
@@ -14,12 +19,12 @@ public func flecs_stage_from_world(
         return UnsafeMutableRawPointer(w).bindMemory(to: ecs_stage_t.self, capacity: 1)
     }
     // It's a real world - return stage[0]
-    guard let stages = w.pointee.stages, w.pointee.stage_count > 0 else {
+    if w.pointee.stages == nil || w.pointee.stage_count <= 0 {
         return nil
     }
-    guard let stage0 = stages.pointee else { return nil }
-    world.pointee = stage0.pointee.world ?? w
-    return stage0
+    if w.pointee.stages!.pointee == nil { return nil }
+    world.pointee = w.pointee.stages!.pointee!.pointee.world ?? w
+    return w.pointee.stages!.pointee!
 }
 
 /// Get stage from a readonly world pointer.
@@ -29,11 +34,11 @@ public func flecs_stage_from_readonly_world(
     if flecs_poly_is_(UnsafeRawPointer(world), ecs_stage_t_magic) {
         return UnsafeRawPointer(world).assumingMemoryBound(to: ecs_stage_t.self)
     }
-    guard let stages = world.pointee.stages, world.pointee.stage_count > 0 else {
+    if world.pointee.stages == nil || world.pointee.stage_count <= 0 {
         return nil
     }
-    guard let stage0 = stages.pointee else { return nil }
-    return UnsafePointer(stage0)
+    if world.pointee.stages!.pointee == nil { return nil }
+    return UnsafePointer(world.pointee.stages!.pointee!)
 }
 
 /// Set the current system entity on a stage.
@@ -47,14 +52,14 @@ public func flecs_stage_set_system(
     return old
 }
 
-// MARK: - Stage Count & Access
 
 /// Get the number of stages in the world.
 public func ecs_get_stage_count(
     _ world: UnsafePointer<ecs_world_t>) -> Int32
 {
-    guard let w = ecs_get_world(UnsafeRawPointer(world)) else { return 0 }
-    return w.pointee.stage_count
+    let w = ecs_get_world(UnsafeRawPointer(world))
+    if w == nil { return 0 }
+    return w!.pointee.stage_count
 }
 
 /// Get a stage by index.
@@ -62,9 +67,9 @@ public func ecs_get_stage(
     _ world: UnsafePointer<ecs_world_t>,
     _ stage_id: Int32) -> UnsafeMutableRawPointer?
 {
-    guard world.pointee.stage_count > stage_id else { return nil }
-    guard let stages = world.pointee.stages else { return nil }
-    return UnsafeMutableRawPointer(stages[Int(stage_id)])
+    if world.pointee.stage_count <= stage_id { return nil }
+    if world.pointee.stages == nil { return nil }
+    return UnsafeMutableRawPointer(world.pointee.stages![Int(stage_id)])
 }
 
 /// Get the id of a stage.
@@ -81,7 +86,6 @@ public func ecs_stage_get_id(
     return 0
 }
 
-// MARK: - Readonly Mode
 
 /// Enter readonly mode. All mutations go through command buffers.
 @discardableResult
@@ -105,7 +109,7 @@ public func ecs_readonly_begin(
 public func ecs_readonly_end(
     _ world: UnsafeMutablePointer<ecs_world_t>)
 {
-    guard (world.pointee.flags & EcsWorldReadonly) != 0 else { return }
+    if (world.pointee.flags & EcsWorldReadonly) == 0 { return }
 
     world.pointee.flags &= ~EcsWorldReadonly
     world.pointee.flags &= ~EcsWorldMultiThreaded
@@ -117,7 +121,8 @@ public func ecs_readonly_end(
 public func ecs_stage_is_readonly(
     _ stage: UnsafePointer<ecs_world_t>) -> Bool
 {
-    guard let world = ecs_get_world(UnsafeRawPointer(stage)) else { return false }
+    let world = ecs_get_world(UnsafeRawPointer(stage))
+    if world == nil { return false }
 
     if flecs_poly_is_(UnsafeRawPointer(stage), ecs_stage_t_magic) {
         let s = UnsafeRawPointer(stage).assumingMemoryBound(to: ecs_stage_t.self)
@@ -126,7 +131,7 @@ public func ecs_stage_is_readonly(
         }
     }
 
-    if (world.pointee.flags & EcsWorldReadonly) != 0 {
+    if (world!.pointee.flags & EcsWorldReadonly) != 0 {
         if flecs_poly_is_(UnsafeRawPointer(stage), ecs_world_t_magic) {
             return true
         }
@@ -143,49 +148,52 @@ public func ecs_stage_is_readonly(
 public func ecs_is_deferred(
     _ world: UnsafePointer<ecs_world_t>) -> Bool
 {
-    guard let stage = flecs_stage_from_readonly_world(world) else { return false }
-    return stage.pointee.defer > 0
+    let stage = flecs_stage_from_readonly_world(world)
+    if stage == nil { return false }
+    return stage!.pointee.defer > 0
 }
 
 /// Check if defer is suspended.
 public func ecs_is_defer_suspended(
     _ world: UnsafePointer<ecs_world_t>) -> Bool
 {
-    guard let stage = flecs_stage_from_readonly_world(world) else { return false }
-    return stage.pointee.defer < 0
+    let stage = flecs_stage_from_readonly_world(world)
+    if stage == nil { return false }
+    return stage!.pointee.defer < 0
 }
 
-// MARK: - Suspend/Resume Readonly
 
 /// Suspend readonly mode to allow direct mutations.
 public func flecs_suspend_readonly(
     _ stage_world: UnsafePointer<ecs_world_t>,
     _ state: UnsafeMutablePointer<ecs_suspend_readonly_state_t>) -> UnsafeMutablePointer<ecs_world_t>?
 {
-    guard let world_ptr = ecs_get_world(UnsafeRawPointer(stage_world)) else { return nil }
-    let world = UnsafeMutablePointer(mutating: world_ptr)
+    let world_ptr = ecs_get_world(UnsafeRawPointer(stage_world))
+    if world_ptr == nil { return nil }
+    let world = UnsafeMutablePointer(mutating: world_ptr!)
 
     let is_readonly = ECS_BIT_IS_SET(world.pointee.flags, EcsWorldReadonly)
     var temp_world = world
-    guard let stage = flecs_stage_from_world(&temp_world) else { return nil }
+    let stage = flecs_stage_from_world(&temp_world)
+    if stage == nil { return nil }
 
-    if !is_readonly && stage.pointee.defer == 0 {
+    if !is_readonly && stage!.pointee.defer == 0 {
         state.pointee.is_readonly = false
         state.pointee.is_deferred = false
         return world
     }
 
     state.pointee.is_readonly = is_readonly
-    state.pointee.is_deferred = stage.pointee.defer != 0
-    state.pointee.cmd_flushing = stage.pointee.cmd_flushing
+    state.pointee.is_deferred = stage!.pointee.defer != 0
+    state.pointee.cmd_flushing = stage!.pointee.cmd_flushing
 
     world.pointee.flags &= ~EcsWorldReadonly
-    stage.pointee.cmd_flushing = false
+    stage!.pointee.cmd_flushing = false
 
-    state.pointee.defer_count = stage.pointee.defer
-    state.pointee.scope = stage.pointee.scope
-    state.pointee.with = stage.pointee.with
-    stage.pointee.defer = 0
+    state.pointee.defer_count = stage!.pointee.defer
+    state.pointee.scope = stage!.pointee.scope
+    state.pointee.with = stage!.pointee.with
+    stage!.pointee.defer = 0
 
     return world
 }
@@ -196,26 +204,27 @@ public func flecs_resume_readonly(
     _ state: UnsafeMutablePointer<ecs_suspend_readonly_state_t>)
 {
     var temp_world = world
-    guard let stage = flecs_stage_from_world(&temp_world) else { return }
+    let stage = flecs_stage_from_world(&temp_world)
+    if stage == nil { return }
 
     if state.pointee.is_readonly || state.pointee.is_deferred {
         if state.pointee.is_readonly {
             world.pointee.flags |= EcsWorldReadonly
         }
-        stage.pointee.defer = state.pointee.defer_count
-        stage.pointee.cmd_flushing = state.pointee.cmd_flushing
-        stage.pointee.scope = state.pointee.scope
-        stage.pointee.with = state.pointee.with
+        stage!.pointee.defer = state.pointee.defer_count
+        stage!.pointee.cmd_flushing = state.pointee.cmd_flushing
+        stage!.pointee.scope = state.pointee.scope
+        stage!.pointee.with = state.pointee.with
     }
 }
 
-// MARK: - World Flags Access
 
 /// Get world flags.
 @inline(__always)
 public func ecs_world_get_flags(
     _ world: UnsafePointer<ecs_world_t>) -> ecs_flags32_t
 {
-    guard let w = ecs_get_world(UnsafeRawPointer(world)) else { return 0 }
-    return w.pointee.flags
+    let w = ecs_get_world(UnsafeRawPointer(world))
+    if w == nil { return 0 }
+    return w!.pointee.flags
 }

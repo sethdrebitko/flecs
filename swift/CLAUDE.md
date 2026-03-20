@@ -241,10 +241,19 @@ Finish partially-started addons, then translate remaining.
 ## Known Issues to Fix
 
 1. **31+ TODO comments** - Must be replaced with actual implementations
-2. **Memory function inconsistency** - Standardize on `ecs_os_*` functions
+2. ~~**Memory function inconsistency** - Standardize on `ecs_os_*` functions~~ RESOLVED
 3. **47 bare `memcpy` calls** - Replace with `ecs_os_memcpy`
 4. **5 bare `strdup` calls** - Replace with `ecs_os_strdup`
-5. **Mixed `.allocate()/.deallocate()` with `ecs_os_malloc/ecs_os_free`** - Pick one per context
+5. ~~**Mixed `.allocate()/.deallocate()` with `ecs_os_malloc/ecs_os_free`**~~ RESOLVED - All allocations now use `ecs_os_calloc_t/n`, all frees use `ecs_os_free`
+
+## Resolved Drift Issues
+
+1. **`.allocate()/.deallocate()` replaced with `ecs_os_*` family** - Added `ecs_os_malloc_t`, `ecs_os_calloc_t`, `ecs_os_malloc_n`, `ecs_os_calloc_n`, `ecs_os_realloc_n`, `ecs_os_free_t` helpers to OsApi.swift. All 61 `.allocate()` and ~51 `.deallocate()` calls converted.
+2. **Swift enums replaced with C-style typealiases + constants** - `EcsInoutKind`, `EcsOperKind`, `EcsQueryCacheKind`, `ecs_table_eventkind_t` converted to `typealias` + global constants matching C names.
+3. **`guard let`/`if let` replaced with C-style null checks** - All optional unwrapping converted to `if x == nil { return }` with `x!` force-unwrap, matching C's `if (!ptr) return NULL;` pattern.
+4. **`// MARK:` section markers removed** - 384 Swift-specific section markers stripped from all files.
+5. **`import Foundation` replaced with C library imports** - All files now use `#if canImport(Darwin)/import Darwin/#elseif canImport(Glibc)/import Glibc/#endif` instead of Foundation.
+6. **`ecs_os_memcpy`, `ecs_os_memset`, `ecs_os_zeromem` helpers added** - Memory operation macros from C `os_api.h` now available in Swift.
 
 ## Line Count Summary
 

@@ -1,9 +1,14 @@
 // Pipeline.swift - 1:1 translation of flecs addons/pipeline/*.c
 // Pipeline building, execution, frame management, and worker threads
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Pipeline Types
 
 /// Pipeline operation: a segment of systems to run, possibly with a merge point.
 public struct ecs_pipeline_op_t {
@@ -31,7 +36,6 @@ public struct EcsPipeline {
     public init() {}
 }
 
-// MARK: - Write State Tracking
 
 /// Tracks which components have been written to detect merge points.
 private struct ecs_write_state_t {
@@ -97,7 +101,6 @@ private func flecs_pipeline_reset_write_state(
     ws.pointee.write_barrier = false
 }
 
-// MARK: - Pipeline Term Checking
 
 /// Check if a system term requires a merge point.
 private func flecs_pipeline_check_term(
@@ -144,7 +147,8 @@ private func flecs_pipeline_check_terms(
     _ is_active: Bool,
     _ ws: UnsafeMutablePointer<ecs_write_state_t>) -> Bool
 {
-    guard let terms = query.pointee.terms else { return false }
+    if query.pointee.terms == nil { return false }
+    let terms = query.pointee.terms!
     let count = query.pointee.term_count
     var needs_merge = false
 
@@ -167,14 +171,14 @@ private func flecs_pipeline_check_terms(
     return needs_merge
 }
 
-// MARK: - Pipeline Build
 
 /// Build/rebuild a pipeline from its query, inserting merge points.
 public func flecs_pipeline_build(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ pq: UnsafeMutablePointer<ecs_pipeline_state_t>) -> Bool
 {
-    guard let query = pq.pointee.query else { return false }
+    if pq.pointee.query == nil { return false }
+    let query = pq.pointee.query!
 
     let new_match_count = ecs_query_match_count(UnsafePointer(query))
     if pq.pointee.match_count == new_match_count {
@@ -192,7 +196,6 @@ public func flecs_pipeline_build(
     return true
 }
 
-// MARK: - Pipeline Execution
 
 /// Run all pipeline operations on a single stage.
 public func flecs_run_pipeline_ops(
@@ -212,12 +215,12 @@ public func flecs_run_pipeline(
     _ pq: UnsafeMutablePointer<ecs_pipeline_state_t>,
     _ delta_time: ecs_ftime_t)
 {
-    guard let world = world?.assumingMemoryBound(to: ecs_world_t.self) else { return }
+    if world == nil { return }
+    let world = world!.assumingMemoryBound(to: ecs_world_t.self)
     _ = flecs_pipeline_build(world, pq)
     flecs_run_pipeline_ops(world, world.pointee.stages![0]!, 0, 1, delta_time)
 }
 
-// MARK: - Frame Management
 
 /// Begin a new frame. Returns computed delta time.
 public func ecs_frame_begin(
@@ -249,15 +252,14 @@ public func ecs_frame_end(
     // Merge post-frame commands for each stage
     let count = world.pointee.stage_count
     for i in 0..<Int(count) {
-        if let stage = world.pointee.stages?[i] {
-            flecs_stage_merge_post_frame(world, stage)
+        if world.pointee.stages?[i] != nil {
+            flecs_stage_merge_post_frame(world, world.pointee.stages![i]!)
         }
     }
 
     world.pointee.flags &= ~EcsWorldFrameInProgress
 }
 
-// MARK: - Worker Thread Management
 
 /// Set the number of worker threads.
 public func ecs_set_threads(
@@ -303,20 +305,21 @@ public func flecs_create_worker_threads(
 {
     let stages = ecs_get_stage_count(world)
     for i in 1..<stages {
-        guard let stage = ecs_get_stage(world, i)?.assumingMemoryBound(
-            to: ecs_stage_t.self) else { continue }
+        let stage = ecs_get_stage(world, i)?.assumingMemoryBound(
+            to: ecs_stage_t.self)
+        if stage == nil { continue }
         if ecs_using_task_threads(world) {
-            stage.pointee.thread = ecs_os_task_new(flecs_worker, UnsafeMutableRawPointer(stage))
+            stage!.pointee.thread = ecs_os_task_new(flecs_worker, UnsafeMutableRawPointer(stage!))
         } else {
-            stage.pointee.thread = ecs_os_thread_new(flecs_worker, UnsafeMutableRawPointer(stage))
+            stage!.pointee.thread = ecs_os_thread_new(flecs_worker, UnsafeMutableRawPointer(stage!))
         }
     }
 }
 
 /// Worker thread entry point.
 private func flecs_worker(_ arg: UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer? {
-    guard let arg = arg else { return nil }
-    let stage = arg.assumingMemoryBound(to: ecs_stage_t.self)
+    if arg == nil { return nil }
+    let stage = arg!.assumingMemoryBound(to: ecs_stage_t.self)
     let world = stage.pointee.world!
 
     while (world.pointee.flags & EcsWorldQuitWorkers) == 0 {
@@ -380,7 +383,8 @@ public func flecs_join_worker_threads(
     flecs_signal_workers(world)
 
     for i in 1..<Int(count) {
-        guard let stage = world.pointee.stages?[i] else { continue }
+        if world.pointee.stages?[i] == nil { continue }
+        let stage = world.pointee.stages![i]!
         if ecs_using_task_threads(world) {
             ecs_os_task_join(stage.pointee.thread)
         } else {
@@ -402,7 +406,6 @@ public func flecs_workers_progress(
     flecs_run_pipeline(UnsafeMutableRawPointer(world), pq, delta_time)
 }
 
-// MARK: - Module Import
 
 /// Import the Pipeline module.
 public func FlecsPipelineImport(

@@ -1,14 +1,18 @@
 // TreeSpawner.swift - 1:1 translation of flecs tree_spawner.c
 // Optimized data structure for fast prefab hierarchy instantiation
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Tree Spawner Constants
 
 /// Maximum cached depth levels for spawner reuse.
 public let FLECS_TREE_SPAWNER_DEPTH_CACHE_SIZE: Int = 8
 
-// MARK: - Tree Spawner Types
 
 /// Describes a single child in a spawner template.
 public struct ecs_tree_spawner_child_t {
@@ -25,7 +29,6 @@ public struct ecs_tree_spawner_data_t {
     public init() {}
 }
 
-// MARK: - Tree Spawner Lifecycle
 
 /// Free a tree spawner's table references and vectors.
 private func EcsTreeSpawner_free(
@@ -35,12 +38,12 @@ private func EcsTreeSpawner_free(
         // Release table references
         let count = ecs_vec_count(&ptr.pointee.data[i].children)
         if count > 0 {
-            if let elems = ecs_vec_first(&ptr.pointee.data[i].children)?
+            let elems = ecs_vec_first(&ptr.pointee.data[i].children)?
                 .bindMemory(to: ecs_tree_spawner_child_t.self, capacity: Int(count))
-            {
+            if elems != nil {
                 for j in 0..<Int(count) {
-                    if let table = elems[j].table {
-                        flecs_table_release(table)
+                    if elems![j].table != nil {
+                        flecs_table_release(elems![j].table!)
                     }
                 }
             }
@@ -51,7 +54,6 @@ private func EcsTreeSpawner_free(
     }
 }
 
-// MARK: - Build Spawner Type
 
 /// Build a type for a spawner child table.
 /// Replaces ChildOf with Parent, strips DontInherit, adds (IsA, child).
@@ -65,8 +67,10 @@ private func flecs_prefab_spawner_build_type(
     flecs_type_add(world, &dst, ecs_id_EcsParent)
 
     let count = table.pointee.type.count
-    guard let array = table.pointee.type.array else { return dst }
-    guard let records = table.pointee._.pointee.records else { return dst }
+    if table.pointee.type.array == nil { return dst }
+    let array = table.pointee.type.array!
+    if table.pointee._.pointee.records == nil { return dst }
+    let records = table.pointee._.pointee.records!
 
     for i in 0..<Int(count) {
         var id = array[i]
@@ -106,25 +110,29 @@ private func flecs_prefab_spawner_build_from_cr(
     _ parent_index: Int32,
     _ depth: Int32)
 {
-    guard let pair = cr.pointee.pair else { return }
-    let children_count = ecs_vec_count(&pair.pointee.ordered_children)
-    guard children_count > 0 else { return }
-    guard let children = ecs_vec_first(&pair.pointee.ordered_children)?
-        .bindMemory(to: ecs_entity_t.self, capacity: Int(children_count)) else { return }
+    if cr.pointee.pair == nil { return }
+    let children_count = ecs_vec_count(&cr.pointee.pair!.pointee.ordered_children)
+    if children_count <= 0 { return }
+    let children = ecs_vec_first(&cr.pointee.pair!.pointee.ordered_children)?
+        .bindMemory(to: ecs_entity_t.self, capacity: Int(children_count))
+    if children == nil { return }
 
     let elem_size = Int32(MemoryLayout<ecs_tree_spawner_child_t>.stride)
 
     for i in 0..<Int(children_count) {
-        let child = children[i]
-        guard let r = flecs_entities_get(UnsafePointer(world), child) else { continue }
-        guard let table = r.pointee.table else { continue }
+        let child = children![i]
+        let r = flecs_entities_get(UnsafePointer(world), child)
+        if r == nil { continue }
+        if r!.pointee.table == nil { continue }
+        let table = r!.pointee.table!
 
         if (table.pointee.flags & EcsTableHasParent) == 0 {
             continue
         }
 
-        guard let elem_ptr = ecs_vec_append(nil, spawner, elem_size) else { continue }
-        let elem = elem_ptr.bindMemory(to: ecs_tree_spawner_child_t.self, capacity: 1)
+        let elem_ptr = ecs_vec_append(nil, spawner, elem_size)
+        if elem_ptr == nil { continue }
+        let elem = elem_ptr!.bindMemory(to: ecs_tree_spawner_child_t.self, capacity: 1)
         elem.pointee.parent_index = parent_index
         elem.pointee.child_name = nil
         elem.pointee.child = UInt32(child)
@@ -138,31 +146,32 @@ private func flecs_prefab_spawner_build_from_cr(
         flecs_type_free(world, &type)
 
         // Keep table alive
-        if let t = elem.pointee.table {
-            flecs_table_keep(t)
+        if elem.pointee.table != nil {
+            flecs_table_keep(elem.pointee.table!)
         }
 
         // Recurse into children of this child
-        if (r.pointee.row & EcsEntityIsTraversable) == 0 { continue }
+        if (r!.pointee.row & EcsEntityIsTraversable) == 0 { continue }
 
-        guard let child_cr = flecs_components_get(
-            UnsafePointer(world), ecs_childof(child)) else { continue }
+        let child_cr = flecs_components_get(
+            UnsafePointer(world), ecs_childof(child))
+        if child_cr == nil { continue }
 
         flecs_prefab_spawner_build_from_cr(
-            world, child_cr, spawner,
+            world, child_cr!, spawner,
             ecs_vec_count(spawner), depth + 1)
     }
 }
 
-// MARK: - Build Spawner
 
 /// Build a tree spawner for a base entity.
 public func flecs_prefab_spawner_build(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ base: ecs_entity_t) -> UnsafeMutablePointer<EcsTreeSpawner>?
 {
-    guard let cr = flecs_components_get(
-        UnsafePointer(world), ecs_childof(base)) else {
+    let cr = flecs_components_get(
+        UnsafePointer(world), ecs_childof(base))
+    if cr == nil {
         return nil
     }
 
@@ -170,23 +179,23 @@ public func flecs_prefab_spawner_build(
     var spawner = ecs_vec_t()
     ecs_vec_init(nil, &spawner, elem_size, 0)
 
-    flecs_prefab_spawner_build_from_cr(world, cr, &spawner, 0, 1)
+    flecs_prefab_spawner_build_from_cr(world, cr!, &spawner, 0, 1)
 
     let alive_base = flecs_entities_get_alive(world, base)
-    guard let ts = ecs_ensure(world, alive_base, EcsTreeSpawner.self) else {
+    let ts = ecs_ensure(world, alive_base, EcsTreeSpawner.self)
+    if ts == nil {
         return nil
     }
-    ts.pointee.data[0].children = spawner
+    ts!.pointee.data[0].children = spawner
 
     // Initialize remaining depth vectors
     for i in 1..<FLECS_TREE_SPAWNER_DEPTH_CACHE_SIZE {
-        ecs_vec_init(nil, &ts.pointee.data[i].children, elem_size, 0)
+        ecs_vec_init(nil, &ts!.pointee.data[i].children, elem_size, 0)
     }
 
     return ts
 }
 
-// MARK: - Spawner Instantiation
 
 /// Instantiate all children from a tree spawner for an instance entity.
 public func flecs_spawner_instantiate(
@@ -194,8 +203,10 @@ public func flecs_spawner_instantiate(
     _ spawner: UnsafeMutablePointer<EcsTreeSpawner>,
     _ instance: ecs_entity_t)
 {
-    guard let r_instance = flecs_entities_get(UnsafePointer(world), instance) else { return }
-    guard let instance_table = r_instance.pointee.table else { return }
+    let r_instance = flecs_entities_get(UnsafePointer(world), instance)
+    if r_instance == nil { return }
+    if r_instance!.pointee.table == nil { return }
+    let instance_table = r_instance!.pointee.table!
     let depth = flecs_relation_depth(UnsafePointer(world), EcsChildOf, UnsafePointer(instance_table))
     let child_count = ecs_vec_count(&spawner.pointee.data[0].children)
     if child_count == 0 { return }
@@ -211,8 +222,9 @@ public func flecs_spawner_instantiate(
         return
     }
 
-    guard let spawn_children = ecs_vec_first(vec)?
-        .bindMemory(to: ecs_tree_spawner_child_t.self, capacity: Int(child_count)) else {
+    let spawn_children = ecs_vec_first(vec)?
+        .bindMemory(to: ecs_tree_spawner_child_t.self, capacity: Int(child_count))
+    if spawn_children == nil {
         return
     }
 
@@ -227,18 +239,21 @@ public func flecs_spawner_instantiate(
         let entity = flecs_new_id(world)
         parents[i + 1] = entity
 
-        let spawn_child = spawn_children[i]
-        guard var table = spawn_child.table else { continue }
+        let spawn_child = spawn_children![i]
+        if spawn_child.table == nil { continue }
+        var table = spawn_child.table!
 
         if is_prefab {
             var diff = ecs_table_diff_t()
             var id = EcsPrefab
-            if let new_table = flecs_table_traverse_add(world, table, &id, &diff) {
-                table = new_table
+            let new_table = flecs_table_traverse_add(world, table, &id, &diff)
+            if new_table != nil {
+                table = new_table!
             }
         }
 
-        guard let r = flecs_entities_get(UnsafePointer(world), entity) else { continue }
+        let r = flecs_entities_get(UnsafePointer(world), entity)
+        if r == nil { continue }
         let flags = table.pointee.flags & EcsTableAddEdgeFlags
 
         var table_diff = ecs_table_diff_t()
@@ -253,41 +268,42 @@ public func flecs_spawner_instantiate(
 
         // Set up entity in table
         let row = table.pointee.data.count
-        r.pointee.table = UnsafeMutableRawPointer(table)
-        r.pointee.row = UInt32(row)
+        r!.pointee.table = UnsafeMutableRawPointer(table)
+        r!.pointee.row = UInt32(row)
         flecs_table_append(world, table, entity, true, true)
 
         // Set parent component value
         let parent_column = table.pointee.component_map![Int(ecs_id_EcsParent)]
         if parent_column > 0 {
-            if let parent_data = table.pointee.data.columns![Int(parent_column - 1)].data?
+            let parent_data = table.pointee.data.columns![Int(parent_column - 1)].data?
                 .bindMemory(to: EcsParent.self, capacity: Int(row) + 1)
-            {
-                parent_data[Int(row)].value = parent
+            if parent_data != nil {
+                parent_data![Int(row)].value = parent
             }
         }
 
         flecs_actions_new(world, table, row, 1, &table_diff, 0, false, true)
 
-        if is_prefab, let name = spawn_child.child_name {
-            ecs_set_name(world, entity, name)
+        if is_prefab && spawn_child.child_name != nil {
+            ecs_set_name(world, entity, spawn_child.child_name!)
         }
 
-        if let cr = cr {
-            flecs_add_non_fragmenting_child_w_records(world, parent, entity, cr, r)
+        if cr != nil {
+            flecs_add_non_fragmenting_child_w_records(world, parent, entity, cr!, r!)
         }
 
         // Copy sparse components from base child
         let base_child = ecs_entity_t(spawn_child.child)
-        if let spawn_r = flecs_entities_get_any(world, base_child) {
+        let spawn_r = flecs_entities_get_any(world, base_child)
+        if spawn_r != nil {
             var base_range = ecs_table_range_t()
-            base_range.table = spawn_r.pointee.table
+            base_range.table = spawn_r!.pointee.table
             base_range.offset = 0
             base_range.count = 1
             flecs_instantiate_sparse(world, &base_range, &base_child,
-                table, &entity, ECS_RECORD_TO_ROW(r.pointee.row))
+                table, &entity, ECS_RECORD_TO_ROW(r!.pointee.row))
 
-            if (spawn_r.pointee.row & EcsEntityHasDontFragment) != 0 {
+            if (spawn_r!.pointee.row & EcsEntityHasDontFragment) != 0 {
                 flecs_instantiate_dont_fragment(
                     world, ecs_entity_t(spawn_child.child), entity)
             }
@@ -295,7 +311,6 @@ public func flecs_spawner_instantiate(
     }
 }
 
-// MARK: - Bootstrap
 
 /// Register TreeSpawner type info during bootstrap.
 public func flecs_bootstrap_spawner(

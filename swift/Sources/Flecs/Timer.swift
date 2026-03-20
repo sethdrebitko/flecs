@@ -1,9 +1,14 @@
 // Timer.swift - 1:1 translation of flecs addons/timer.c
 // Timer, rate filter, and tick source components
 
-import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
-// MARK: - Timer Types
 
 /// Timer component. Fires after timeout, optionally repeating.
 public struct EcsTimer {
@@ -32,7 +37,6 @@ public struct EcsTickSource {
     public init() {}
 }
 
-// MARK: - Timer API
 
 /// Set a timeout timer on an entity. Creates a single-shot timer.
 @discardableResult
@@ -56,8 +60,8 @@ public func ecs_get_timeout(
     _ world: UnsafePointer<ecs_world_t>,
     _ timer: ecs_entity_t) -> ecs_ftime_t
 {
-    guard let value = ecs_get(world, timer, EcsTimer.self) else { return 0 }
-    return value.pointee.timeout
+    let value = ecs_get(world, timer, EcsTimer.self); if value == nil { return 0 }
+    return value!.pointee.timeout
 }
 
 /// Set a repeating interval timer on an entity.
@@ -70,9 +74,10 @@ public func ecs_set_interval(
     var e = timer
     if e == 0 { e = ecs_new(world) }
 
-    if let t = ecs_ensure(world, e, EcsTimer.self) {
-        t.pointee.timeout = interval
-        t.pointee.active = true
+    let t = ecs_ensure(world, e, EcsTimer.self)
+    if t != nil {
+        t!.pointee.timeout = interval
+        t!.pointee.active = true
     }
 
     return e
@@ -84,8 +89,8 @@ public func ecs_get_interval(
     _ timer: ecs_entity_t) -> ecs_ftime_t
 {
     if timer == 0 { return 0 }
-    guard let value = ecs_get(world, timer, EcsTimer.self) else { return 0 }
-    return value.pointee.timeout
+    let value = ecs_get(world, timer, EcsTimer.self); if value == nil { return 0 }
+    return value!.pointee.timeout
 }
 
 /// Start (activate) a timer.
@@ -93,9 +98,9 @@ public func ecs_start_timer(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ timer: ecs_entity_t)
 {
-    guard let ptr = ecs_ensure(world, timer, EcsTimer.self) else { return }
-    ptr.pointee.active = true
-    ptr.pointee.time = 0
+    let ptr = ecs_ensure(world, timer, EcsTimer.self); if ptr == nil { return }
+    ptr!.pointee.active = true
+    ptr!.pointee.time = 0
 }
 
 /// Stop (deactivate) a timer.
@@ -103,8 +108,8 @@ public func ecs_stop_timer(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ timer: ecs_entity_t)
 {
-    guard let ptr = ecs_ensure(world, timer, EcsTimer.self) else { return }
-    ptr.pointee.active = false
+    let ptr = ecs_ensure(world, timer, EcsTimer.self); if ptr == nil { return }
+    ptr!.pointee.active = false
 }
 
 /// Reset a timer's elapsed time to zero.
@@ -112,11 +117,10 @@ public func ecs_reset_timer(
     _ world: UnsafeMutablePointer<ecs_world_t>,
     _ timer: ecs_entity_t)
 {
-    guard let ptr = ecs_ensure(world, timer, EcsTimer.self) else { return }
-    ptr.pointee.time = 0
+    let ptr = ecs_ensure(world, timer, EcsTimer.self); if ptr == nil { return }
+    ptr!.pointee.time = 0
 }
 
-// MARK: - Rate Filter API
 
 /// Set a rate filter on an entity. Fires every `rate` ticks of `source`.
 @discardableResult
@@ -141,79 +145,79 @@ public func ecs_set_tick_source(
     _ system: ecs_entity_t,
     _ tick_source: ecs_entity_t)
 {
-    guard let system_data = flecs_poly_get_(
+    let system_data = flecs_poly_get_(
         UnsafePointer(world), system, EcsSystem)?.bindMemory(
-        to: ecs_system_t.self, capacity: 1) else { return }
-    system_data.pointee.tick_source = tick_source
+        to: ecs_system_t.self, capacity: 1)
+    if system_data == nil { return }
+    system_data!.pointee.tick_source = tick_source
 }
 
-// MARK: - Timer Systems (callbacks)
 
 /// System: progress timers, setting tick when timeout is reached.
 private func ProgressTimers(_ it: UnsafeMutablePointer<ecs_iter_t>) {
-    guard let timer = ecs_field(it, EcsTimer.self, 0) else { return }
-    guard let tick_source = ecs_field(it, EcsTickSource.self, 1) else { return }
+    let timer = ecs_field(it, EcsTimer.self, 0); if timer == nil { return }
+    let tick_source = ecs_field(it, EcsTickSource.self, 1); if tick_source == nil { return }
 
     let info = ecs_get_world_info(it.pointee.world)
 
     for i in 0..<Int(it.pointee.count) {
-        tick_source[i].tick = false
-        if !timer[i].active { continue }
+        tick_source![i].tick = false
+        if !timer![i].active { continue }
 
-        let time_elapsed = timer[i].time + info!.pointee.delta_time_raw
-        let timeout = timer[i].timeout
+        let time_elapsed = timer![i].time + info!.pointee.delta_time_raw
+        let timeout = timer![i].timeout
 
         if time_elapsed >= timeout {
             var t = time_elapsed - timeout
             if t > timeout { t = 0 }
-            timer[i].time = t
-            tick_source[i].tick = true
-            tick_source[i].time_elapsed = time_elapsed - timer[i].overshoot
-            timer[i].overshoot = t
-            if timer[i].single_shot { timer[i].active = false }
+            timer![i].time = t
+            tick_source![i].tick = true
+            tick_source![i].time_elapsed = time_elapsed - timer![i].overshoot
+            timer![i].overshoot = t
+            if timer![i].single_shot { timer![i].active = false }
         } else {
-            timer[i].time = time_elapsed
+            timer![i].time = time_elapsed
         }
     }
 }
 
 /// System: progress rate filters.
 private func ProgressRateFilters(_ it: UnsafeMutablePointer<ecs_iter_t>) {
-    guard let filter = ecs_field(it, EcsRateFilter.self, 0) else { return }
-    guard let tick_dst = ecs_field(it, EcsTickSource.self, 1) else { return }
+    let filter = ecs_field(it, EcsRateFilter.self, 0); if filter == nil { return }
+    let tick_dst = ecs_field(it, EcsTickSource.self, 1); if tick_dst == nil { return }
 
     for i in 0..<Int(it.pointee.count) {
-        filter[i].time_elapsed += it.pointee.delta_time
+        filter![i].time_elapsed += it.pointee.delta_time
 
         var inc = true
-        if filter[i].src != 0 {
-            if let tick_src = ecs_get(it.pointee.world, filter[i].src, EcsTickSource.self) {
-                inc = tick_src.pointee.tick
+        if filter![i].src != 0 {
+            let tick_src = ecs_get(it.pointee.world, filter![i].src, EcsTickSource.self)
+            if tick_src != nil {
+                inc = tick_src!.pointee.tick
             }
         }
 
         if inc {
-            filter[i].tick_count += 1
-            let triggered = (filter[i].tick_count % filter[i].rate) == 0
-            tick_dst[i].tick = triggered
-            tick_dst[i].time_elapsed = filter[i].time_elapsed
-            if triggered { filter[i].time_elapsed = 0 }
+            filter![i].tick_count += 1
+            let triggered = (filter![i].tick_count % filter![i].rate) == 0
+            tick_dst![i].tick = triggered
+            tick_dst![i].time_elapsed = filter![i].time_elapsed
+            if triggered { filter![i].time_elapsed = 0 }
         } else {
-            tick_dst[i].tick = false
+            tick_dst![i].tick = false
         }
     }
 }
 
 /// System: unconditionally tick sources without timer/rate filter.
 private func ProgressTickSource(_ it: UnsafeMutablePointer<ecs_iter_t>) {
-    guard let tick_src = ecs_field(it, EcsTickSource.self, 0) else { return }
+    let tick_src = ecs_field(it, EcsTickSource.self, 0); if tick_src == nil { return }
     for i in 0..<Int(it.pointee.count) {
-        tick_src[i].tick = true
-        tick_src[i].time_elapsed = it.pointee.delta_time
+        tick_src![i].tick = true
+        tick_src![i].time_elapsed = it.pointee.delta_time
     }
 }
 
-// MARK: - Module Import
 
 /// Import the Timer module, registering components and systems.
 public func FlecsTimerImport(
