@@ -240,11 +240,15 @@ Finish partially-started addons, then translate remaining.
 
 ## Known Issues to Fix
 
-1. **31+ TODO comments** - Must be replaced with actual implementations
+1. **21 TODO comments** remaining in Entity.swift (14), Commands.swift (4), World.swift (3) - Must be replaced with actual implementations
 2. ~~**Memory function inconsistency** - Standardize on `ecs_os_*` functions~~ RESOLVED
-3. **47 bare `memcpy` calls** - Replace with `ecs_os_memcpy`
-4. **5 bare `strdup` calls** - Replace with `ecs_os_strdup`
+3. **~33 bare `memcpy` calls** across 12 files - Replace with `ecs_os_memcpy`
+4. **~5 bare `strdup` calls** across 5 files - Replace with `ecs_os_strdup`
 5. ~~**Mixed `.allocate()/.deallocate()` with `ecs_os_malloc/ecs_os_free`**~~ RESOLVED - All allocations now use `ecs_os_calloc_t/n`, all frees use `ecs_os_free`
+6. ~~**805 `guard let`/`if let` across 51 files**~~ RESOLVED - Converted to C-style null checks; only 18 remain in OsApi.swift (function pointer dispatch, matches C pattern)
+7. ~~**384 `// MARK:` section markers across 57 files**~~ RESOLVED - All removed
+8. ~~**`import Foundation` in all 56 files**~~ RESOLVED - Replaced with `#if canImport(Darwin)/import Darwin/#elseif canImport(Glibc)/import Glibc/#endif`
+9. ~~**4 Swift enums replacing C integer enums**~~ RESOLVED - Converted to `typealias` + global constants
 
 ## Resolved Drift Issues
 
